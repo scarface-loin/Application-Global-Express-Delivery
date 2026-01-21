@@ -1,0 +1,265 @@
+// App.jsx - Composant principal avec gestion d'authentification
+import React, { useState, useEffect } from 'react';
+import { Home, BarChart3, Bell, User } from 'lucide-react';
+
+// Import des composants
+import Login from './components/Login';
+import ForcePasswordChange from './components/ForcePasswordChange';
+import HomeTab from './components/HomeTab';
+import DeliveryDetail from './components/DeliveryDetail';
+import StatsTab from './components/StatsTab';
+import NotificationsTab from './components/NotificationsTab';
+import AccountTab from './components/AccountTab';
+
+// Import du service API
+import apiService from './services/api';
+
+const App = () => {
+  // États d'authentification
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [mustChangePassword, setMustChangePassword] = useState(false);
+  const [currentUser, setCurrentUser] = useState(null);
+
+  // États de l'application
+  const [activeTab, setActiveTab] = useState('home');
+  const [deliveries, setDeliveries] = useState([]);
+  const [selectedDelivery, setSelectedDelivery] = useState(null);
+  const [totalAmount, setTotalAmount] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  // Vérifier l'authentification au chargement
+  useEffect(() => {
+    checkAuthentication();
+  }, []);
+
+  // Calculer le total quand les livraisons changent
+  useEffect(() => {
+    if (isAuthenticated && !mustChangePassword) {
+      calculateTotalAmount();
+    }
+  }, [deliveries, isAuthenticated, mustChangePassword]);
+
+  const checkAuthentication = () => {
+    const isAuth = apiService.auth.isAuthenticated();
+    const user = apiService.auth.getCurrentUser();
+
+    if (isAuth && user) {
+      setIsAuthenticated(true);
+      setCurrentUser(user);
+      
+      if (user.mustChangePassword) {
+        setMustChangePassword(true);
+        setLoading(false);
+      } else {
+        loadDeliveries();
+      }
+    } else {
+      setIsAuthenticated(false);
+      setLoading(false);
+    }
+  };
+
+  const handleLoginSuccess = (user, mustChange) => {
+    setIsAuthenticated(true);
+    setCurrentUser(user);
+    setMustChangePassword(mustChange);
+
+    if (!mustChange) {
+      loadDeliveries();
+    } else {
+      setLoading(false);
+    }
+  };
+
+  const handlePasswordChanged = () => {
+    setMustChangePassword(false);
+    loadDeliveries();
+  };
+
+  const handleLogout = async () => {
+    await apiService.auth.logout();
+    setIsAuthenticated(false);
+    setCurrentUser(null);
+    setMustChangePassword(false);
+    setDeliveries([]);
+    setSelectedDelivery(null);
+    setActiveTab('home');
+  };
+
+  const loadDeliveries = async () => {
+    setLoading(true);
+    try {
+      const response = await apiService.deliveries.getAll();
+      setDeliveries(response.data || response);
+      setLoading(false);
+    } catch (error) {
+      console.error('Error loading deliveries:', error);
+      
+      // Si erreur 403 (mot de passe à changer)
+      if (error.status === 403) {
+        setMustChangePassword(true);
+        setLoading(false);
+        return;
+      }
+      
+      // Utiliser des données mockées en cas d'erreur
+      const mockData = await apiService.utils.getMockDeliveries();
+      setDeliveries(mockData.data);
+      setLoading(false);
+    }
+  };
+
+  const calculateTotalAmount = () => {
+    const delivered = deliveries.flatMap(d => 
+      d.packages.filter(p => p.status === 'delivered')
+    );
+    const sum = delivered.reduce((acc, p) => acc + p.amount, 0);
+    setTotalAmount(sum);
+  };
+
+  const handleUpdatePackage = async (deliveryId, packageId, newStatus) => {
+    try {
+      await apiService.deliveries.updatePackageStatus(deliveryId, packageId, newStatus);
+      
+      setDeliveries(prev =>
+        prev.map(delivery =>
+          delivery.id === deliveryId
+            ? {
+                ...delivery,
+                packages: delivery.packages.map(pkg =>
+                  pkg.id === packageId ? { ...pkg, status: newStatus } : pkg
+                )
+              }
+            : delivery
+        )
+      );
+
+      if (selectedDelivery && selectedDelivery.id === deliveryId) {
+        setSelectedDelivery(prev => ({
+          ...prev,
+          packages: prev.packages.map(pkg =>
+            pkg.id === packageId ? { ...pkg, status: newStatus } : pkg
+          )
+        }));
+      }
+    } catch (error) {
+      console.error('Error updating package:', error);
+      // En mode développement, mettre à jour quand même localement
+      setDeliveries(prev =>
+        prev.map(delivery =>
+          delivery.id === deliveryId
+            ? {
+                ...delivery,
+                packages: delivery.packages.map(pkg =>
+                  pkg.id === packageId ? { ...pkg, status: newStatus } : pkg
+                )
+              }
+            : delivery
+        )
+      );
+    }
+  };
+
+  const handleSelectDelivery = (delivery) => {
+    setSelectedDelivery(delivery);
+  };
+
+  const handleBack = () => {
+    setSelectedDelivery(null);
+  };
+
+  // Écran de connexion
+  if (!isAuthenticated) {
+    return <Login onLoginSuccess={handleLoginSuccess} />;
+  }
+
+  // Écran de changement de mot de passe obligatoire
+  if (mustChangePassword) {
+    return <ForcePasswordChange onPasswordChanged={handlePasswordChanged} />;
+  }
+
+  // Écran de chargement
+  if (loading && activeTab === 'home') {
+    return (
+      <div className="max-w-md mx-auto h-screen flex items-center justify-center" style={{ backgroundColor: '#f2f2f7' }}>
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-2 border-gray-200 border-t-purple-600 mx-auto mb-3"></div>
+          <p className="text-gray-500 text-sm">Chargement...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Écran de détail de livraison
+  if (selectedDelivery) {
+    return (
+      <div className="max-w-md mx-auto h-screen" style={{ backgroundColor: '#f2f2f7' }}>
+        <DeliveryDetail
+          delivery={selectedDelivery}
+          onBack={handleBack}
+          onUpdatePackage={handleUpdatePackage}
+        />
+      </div>
+    );
+  }
+
+  // Application principale
+  return (
+    <div className="max-w-md mx-auto h-screen relative" style={{ backgroundColor: '#f2f2f7' }}>
+      <div className="h-full">
+        {activeTab === 'home' && (
+          <HomeTab
+            deliveries={deliveries}
+            onSelectDelivery={handleSelectDelivery}
+            totalAmount={totalAmount}
+          />
+        )}
+        {activeTab === 'stats' && <StatsTab />}
+        {activeTab === 'notifications' && <NotificationsTab />}
+        {activeTab === 'account' && (
+          <AccountTab 
+            currentUser={currentUser}
+            onLogout={handleLogout}
+          />
+        )}
+      </div>
+
+      {/* Navigation bar iOS-style */}
+      <nav className="fixed bottom-0 left-0 right-0 max-w-md mx-auto backdrop-blur-xl bg-white/80 border-t border-gray-200/50 safe-area-inset-bottom">
+        <div className="flex justify-around px-2 pb-safe" style={{ paddingBottom: 'max(env(safe-area-inset-bottom), 20px)', paddingTop: '8px' }}>
+          {[
+            { id: 'home', icon: Home, label: 'Accueil' },
+            { id: 'stats', icon: BarChart3, label: 'Stats' },
+            { id: 'notifications', icon: Bell, label: 'Alertes' },
+            { id: 'account', icon: User, label: 'Compte' }
+          ].map(tab => (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              className="flex-1 flex flex-col items-center py-1 transition-all active:scale-95"
+              style={{ WebkitTapHighlightColor: 'transparent' }}
+            >
+              <tab.icon 
+                size={24} 
+                style={{ 
+                  color: activeTab === tab.id ? '#667eea' : '#8e8e93',
+                  strokeWidth: activeTab === tab.id ? 2.5 : 2
+                }} 
+              />
+              <span 
+                className="text-xs mt-1 font-medium"
+                style={{ 
+                  color: activeTab === tab.id ? '#667eea' : '#8e8e93'
+                }}
+              >
+                {tab.label}
+              </span>
+            </button>
+          ))}
+        </div>
+      </nav>
+    </div>
+  );
+};
+
+export default App;
