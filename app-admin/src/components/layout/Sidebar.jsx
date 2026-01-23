@@ -1,5 +1,16 @@
+// src/components/layout/Sidebar.jsx
 import React from 'react';
-import { FiHome, FiPackage, FiUsers, FiUser, FiLogOut, FiTruck, FiPlus, FiSearch } from 'react-icons/fi';
+import { 
+  FiHome, 
+  FiPackage, 
+  FiUsers, 
+  FiUser, 
+  FiLogOut, 
+  FiTruck, 
+  FiPlus, 
+  FiSearch,
+  FiDollarSign // <--- AJOUTER ICI
+} from 'react-icons/fi';
 import { useAuth } from '../../context/AuthContext';
 
 export const Sidebar = ({ isOpen, onClose, currentPage, setCurrentPage }) => {
@@ -9,6 +20,8 @@ export const Sidebar = ({ isOpen, onClose, currentPage, setCurrentPage }) => {
     { id: 'dashboard', label: 'Tableau de bord', icon: <FiHome /> },
     { id: 'deliveries', label: 'Livraisons', icon: <FiPackage /> },
     { id: 'deliverymen', label: 'Livreurs', icon: <FiUsers /> },
+    // AJOUTER LE NOUVEL ONGLET ICI
+    { id: 'settlements', label: 'Caisse & Versements', icon: <FiDollarSign /> },
     { id: 'create-delivery', label: 'Créer Livraison', icon: <FiPlus /> },
     { id: 'tracking', label: 'Suivi Colis', icon: <FiSearch /> },
     { id: 'profile', label: 'Mon Profil', icon: <FiUser /> },

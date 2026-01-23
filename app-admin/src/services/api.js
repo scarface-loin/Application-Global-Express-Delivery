@@ -1,4 +1,5 @@
-const API_BASE_URL = 'https://application-global-express-delivery-back.onrender.com/api';
+// src/services/api.js
+const API_BASE_URL = 'http://localhost:3001/api';
 
 export const apiRequest = async (endpoint, options = {}) => {
   const token = localStorage.getItem('token');
@@ -39,8 +40,8 @@ export const apiRequest = async (endpoint, options = {}) => {
   return response.json();
 };
 
-// Fonction spéciale pour les requêtes FormData
 export const apiFormRequest = async (endpoint, formData) => {
+  // ... (Garde ton code existant ici) ...
   const token = localStorage.getItem('token');
   const headers = {};
   
@@ -68,4 +69,5 @@ export const apiFormRequest = async (endpoint, formData) => {
   return response.json();
 };
 
+// CORRECTION ICI : On exporte uniquement ce qui est défini
 export { API_BASE_URL };

@@ -118,7 +118,6 @@ const Login = ({ onLoginSuccess }) => {
                   style={{ WebkitTapHighlightColor: 'transparent', '--tw-ring-color': '#667eea' }}
                   placeholder="62 21 12 29 8"
                   disabled={loading}
-                  maxLength="11" // 9 chiffres + 2 espaces
                   inputMode="numeric"
                 />
               </div>

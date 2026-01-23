@@ -64,6 +64,7 @@ export const DeliveriesPage = ({ onNavigate }) => {
     setPaymentMethod,
     setError,
     setSuccess,
+    setSelectedDeliveryDetails,
     
     // Fonctions
     handleFilterChange,
@@ -86,6 +87,7 @@ export const DeliveriesPage = ({ onNavigate }) => {
     areAllPackagesDelivered,
     getDeliveredPackagesCount,
     refreshData,
+    convertFirestoreTimestamp,
   } = useDeliveriesLogic(onNavigate);
 
   return (
@@ -179,6 +181,7 @@ export const DeliveriesPage = ({ onNavigate }) => {
                 <option value="accepted">Acceptée</option>
                 <option value="in_progress">En cours</option>
                 <option value="delivered">Livrée</option>
+                <option value="cancelled">Annulée</option>
               </select>
             </div>
           )}

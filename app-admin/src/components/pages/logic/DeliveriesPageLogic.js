@@ -60,27 +60,30 @@ export const useDeliveriesLogic = (onNavigate) => {
     if (!delivery.packages || !Array.isArray(delivery.packages) || delivery.packages.length === 0) {
       return false;
     }
-    return delivery.packages.every(pkg => pkg.status === 'delivered');
+    // Vérifier si tous les colis sont "delivered" ou "transferred"
+    return delivery.packages.every(pkg =>
+      pkg.status === 'delivered' || pkg.status === 'transferred'
+    );
   }, []);
 
   // Fonction pour mettre à jour automatiquement le statut de la livraison
   const updateDeliveryStatusIfNeeded = useCallback(async (delivery) => {
-    // Si tous les colis sont livrés mais la livraison n'est pas "completed"
-    if (areAllPackagesDelivered(delivery) && delivery.status !== 'completed') {
+    // Vérifier si la livraison doit être marquée comme "delivered"
+    if (areAllPackagesDelivered(delivery) && delivery.status !== 'delivered') {
       try {
         const deliveryId = delivery.id;
-        
+
         // Mettre à jour le statut côté serveur
         await apiRequest(`/admin/deliveries/${deliveryId}/auto-complete`, {
           method: 'POST',
           body: JSON.stringify({
-            status: 'completed',
-            completedAt: new Date().toISOString(),
+            status: 'delivered',
+            deliveredAt: new Date().toISOString(),
             autoCompleted: true
           }),
         });
 
-        console.log(`✅ Livraison ${deliveryId} automatiquement marquée comme terminée`);
+        console.log(`✅ Livraison ${deliveryId} automatiquement marquée comme livrée`);
         return true;
       } catch (error) {
         console.error('❌ Erreur lors de la mise à jour automatique:', error);
@@ -89,7 +92,6 @@ export const useDeliveriesLogic = (onNavigate) => {
     }
     return false;
   }, [areAllPackagesDelivered]);
-
   // Charger les données initiales
   useEffect(() => {
     fetchDeliveries();
@@ -101,18 +103,18 @@ export const useDeliveriesLogic = (onNavigate) => {
     console.log('🔍 Application des filtres...');
     console.log('📊 Total des livraisons:', deliveries.length);
     console.log('⚙️ Filtres actuels:', filters);
-    
+
     let filtered = deliveries.filter(delivery => {
       const searchLower = filters.search.toLowerCase();
 
       // Filtrer par statut (si le filtre est activé)
       if (filters.showCompleted) {
-        // Afficher seulement les livraisons terminées
+        // Afficher seulement les livraisons terminées (status = 'completed')
         if (delivery.status !== 'completed') {
           return false;
         }
       } else {
-        // Afficher toutes les livraisons SAUF terminées
+        // Afficher toutes les livraisons SAUT terminées
         if (delivery.status === 'completed') {
           return false;
         }
@@ -157,7 +159,15 @@ export const useDeliveriesLogic = (onNavigate) => {
       if (filters.status && !filters.showCompleted) url += `&status=${filters.status}`;
       if (filters.deliveryType) url += `&deliveryType=${filters.deliveryType}`;
       if (filters.dateRange) url += `&dateRange=${filters.dateRange}`;
-
+      // Dans fetchDeliveries, ajustez l'URL pour les nouveaux statuts
+      if (filters.status && !filters.showCompleted) {
+        // Si le filtre est "delivered", on veut aussi inclure "completed" ?
+        if (filters.status === 'delivered') {
+          url += `&status=delivered,completed`;
+        } else {
+          url += `&status=${filters.status}`;
+        }
+      }
       if (filters.showCompleted) {
         url += `&status=completed`;
       }
@@ -170,9 +180,9 @@ export const useDeliveriesLogic = (onNavigate) => {
 
       // L'API retourne directement un tableau, pas un objet avec data
       let deliveriesData = Array.isArray(response) ? response : [];
-      
+
       console.log('📊 Nombre de livraisons récupérées:', deliveriesData.length);
-      
+
       // Log des statuts pour debug
       console.log('📊 Distribution des statuts:');
       const statusCount = {};
@@ -256,12 +266,15 @@ export const useDeliveriesLogic = (onNavigate) => {
     const statusMap = {
       'pending': 'En attente',
       'assigned': 'Assignée',
-      'accepted': 'Acceptée',
       'in_progress': 'En cours',
-      'transferred': 'Transférée',
+      'issue_reported': 'Problème signalé',
       'delivered': 'Livrée',
-      'completed': 'Terminée',
+      'transferred': 'Transférée',
+      'failed': 'Échouée',
       'cancelled': 'Annulée',
+      // Anciens statuts conservés pour compatibilité
+      'accepted': 'Acceptée', // Peut être retiré si non utilisé
+      'completed': 'Terminée', // Conserver pour l'historique
     };
     return statusMap[status] || status;
   }, []);
@@ -272,7 +285,9 @@ export const useDeliveriesLogic = (onNavigate) => {
       'pending': 'En attente',
       'picked_up': 'Récupéré',
       'in_transit': 'En transit',
+      'at_agency': 'En agence',
       'delivered': 'Livré',
+      'transferred': 'Transféré',
       'failed': 'Échec',
     };
     return statusMap[status] || status;
@@ -288,16 +303,23 @@ export const useDeliveriesLogic = (onNavigate) => {
     try {
       const deliveryId = selectedDeliveryForPayment.id;
 
-      // Vérifier que tous les colis sont livrés
+      // Vérifier que tous les colis sont livrés ou transférés
       if (!areAllPackagesDelivered(selectedDeliveryForPayment)) {
-        setError('Tous les colis doivent être livrés avant de terminer la livraison');
+        setError('Tous les colis doivent être livrés ou transférés avant de terminer la livraison');
+        setCompleting(false);
+        return;
+      }
+
+      // Vérifier que la livraison est en statut "delivered"
+      if (selectedDeliveryForPayment.status !== 'delivered') {
+        setError('La livraison doit être marquée comme "livrée" avant d\'être complétée');
         setCompleting(false);
         return;
       }
 
       // Préparer les données pour l'API
       const requestBody = {
-        status: 'completed',
+        status: 'completed', // Statut final pour l'historique
         paymentReceived: true,
         paymentAmount: paymentAmount || selectedDeliveryForPayment.totalAmount,
         paymentMethod: paymentMethod,
@@ -416,7 +438,7 @@ export const useDeliveriesLogic = (onNavigate) => {
       const response = await apiRequest(`/admin/deliveries/${deliveryId}`);
       // L'API retourne probablement directement l'objet livraison
       const deliveryData = response;
-      
+
       // Normaliser les timestamps
       const normalizedDelivery = {
         ...deliveryData,
@@ -432,7 +454,7 @@ export const useDeliveriesLogic = (onNavigate) => {
           updatedAt: convertFirestoreTimestamp(pkg.updatedAt),
         }))
       };
-      
+
       setSelectedDeliveryDetails(normalizedDelivery);
       setShowDetailsModal(true);
     } catch (error) {
@@ -447,6 +469,23 @@ export const useDeliveriesLogic = (onNavigate) => {
       return `#${id.slice(-8)}`;
     }
     return `#${id}`;
+  }, []);
+
+  const canMarkAsDelivered = useCallback((delivery) => {
+    if (!delivery.packages || !Array.isArray(delivery.packages)) return false;
+
+    // Vérifier si tous les colis sont en statut final
+    const allPackagesFinal = delivery.packages.every(pkg =>
+      pkg.status === 'delivered' ||
+      pkg.status === 'transferred' ||
+      pkg.status === 'failed'
+    );
+
+    // La livraison doit être en cours ou avec problème signalé
+    const isEligibleStatus = delivery.status === 'in_progress' ||
+      delivery.status === 'issue_reported';
+
+    return isEligibleStatus && allPackagesFinal;
   }, []);
 
   const formatDate = useCallback((date) => {
@@ -512,6 +551,7 @@ export const useDeliveriesLogic = (onNavigate) => {
         'Livreur': delivery.deliveryManName || 'Non assigné',
         'Date livraison': formatDate(delivery.deliveredAt),
         'Date paiement': formatDate(delivery.completedAt),
+        'Problèmes signalés': delivery.status === 'issue_reported' ? 'Oui' : 'Non',
       }));
 
       const csvContent = [
@@ -539,28 +579,30 @@ export const useDeliveriesLogic = (onNavigate) => {
   // Calculer les statistiques (mise à jour en temps réel)
   const getStats = useCallback(() => {
     // Utiliser filteredDeliveries pour les statistiques affichées
-    const currentDeliveries = filters.showCompleted 
+    const currentDeliveries = filters.showCompleted
       ? deliveries.filter(d => d.status === 'completed')
       : deliveries.filter(d => d.status !== 'completed');
-    
+
     const stats = {
       total: currentDeliveries.length,
       pending: currentDeliveries.filter(d => d.status === 'pending').length,
       assigned: currentDeliveries.filter(d => d.status === 'assigned').length,
       inProgress: currentDeliveries.filter(d => d.status === 'in_progress').length,
+      issueReported: currentDeliveries.filter(d => d.status === 'issue_reported').length,
       delivered: currentDeliveries.filter(d => d.status === 'delivered').length,
-      completed: deliveries.filter(d => d.status === 'completed').length,
+      transferred: currentDeliveries.filter(d => d.status === 'transferred').length,
+      failed: currentDeliveries.filter(d => d.status === 'failed').length,
       cancelled: currentDeliveries.filter(d => d.status === 'cancelled').length,
+      completed: deliveries.filter(d => d.status === 'completed').length, // Historique
       totalAmount: currentDeliveries.reduce((sum, d) => sum + (parseFloat(d.totalAmount) || 0), 0),
       completedAmount: deliveries
         .filter(d => d.status === 'completed')
         .reduce((sum, d) => sum + (parseFloat(d.totalAmount) || 0), 0),
     };
-    
+
     console.log('📈 Statistiques calculées:', stats);
     return stats;
   }, [deliveries, filters.showCompleted]);
-
   const stats = getStats();
 
   return {
@@ -618,6 +660,7 @@ export const useDeliveriesLogic = (onNavigate) => {
     getStatusText,
     getPackageStatusText,
     areAllPackagesDelivered,
+    canMarkAsDelivered,
     getDeliveredPackagesCount,
     refreshData,
     convertFirestoreTimestamp,

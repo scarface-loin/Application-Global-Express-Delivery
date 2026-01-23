@@ -29,33 +29,48 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
 
       // Récupérer les livraisons du livreur
       const deliveriesResult = await apiService.deliveries.getAll();
-      
+
       if (deliveriesResult.success) {
         const userDeliveries = deliveriesResult.data || [];
         setDeliveries(userDeliveries);
-        
-        // Calculer les statistiques
-        const pendingDels = userDeliveries.filter(d => 
-          ['pending', 'assigned', 'accepted'].includes(d.status)
+
+        // Calculer les statistiques selon les nouveaux statuts
+        const pendingDels = userDeliveries.filter(d =>
+          d.status === 'pending'
         );
-        const inProgressDels = userDeliveries.filter(d => 
+        const assignedDels = userDeliveries.filter(d =>
+          d.status === 'assigned'
+        );
+        const inProgressDels = userDeliveries.filter(d =>
           d.status === 'in_progress'
         );
-        const completedDels = userDeliveries.filter(d => 
+        const issueReportedDels = userDeliveries.filter(d =>
+          d.status === 'issue_reported'
+        );
+        const completedDels = userDeliveries.filter(d =>
           ['delivered', 'transferred'].includes(d.status)
         );
+        const failedDels = userDeliveries.filter(d =>
+          d.status === 'failed'
+        );
+        const cancelledDels = userDeliveries.filter(d =>
+          d.status === 'cancelled'
+        );
 
-        // Calculer le montant total des livraisons en cours
-        const todayAmount = pendingDels.reduce((sum, delivery) => {
-          return sum + (delivery.totalAmount || 0);
-        }, 0);
+        // Calculer le montant total des livraisons à démarrer ou en cours
+        const todayAmount = userDeliveries
+          .filter(d => ['assigned', 'in_progress', 'issue_reported'].includes(d.status))
+          .reduce((sum, delivery) => sum + (delivery.totalAmount || 0), 0);
 
         setTotalAmount(todayAmount);
-        
+
         setStats({
           pending: pendingDels.length,
-          inProgress: inProgressDels.length,
+          assigned: assignedDels.length, // À démarrer
+          inProgress: inProgressDels.length + issueReportedDels.length, // En cours + problèmes
           completed: completedDels.length,
+          failed: failedDels.length,
+          cancelled: cancelledDels.length,
           totalDeliveries: userDeliveries.length
         });
       } else {
@@ -68,12 +83,30 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
         const mockData = apiService.utils.getMockDeliveries();
         if (mockData.success) {
           setDeliveries(mockData.data);
-          setTotalAmount(78000);
+
+          // Calcul du montant pour les données mockées
+          const mockDeliveries = mockData.data;
+          const mockTodayAmount = mockDeliveries
+            .filter(d => ['assigned', 'in_progress', 'issue_reported'].includes(d.status))
+            .reduce((sum, delivery) => sum + (delivery.totalAmount || 0), 0);
+
+          setTotalAmount(mockTodayAmount);
+
+          // Calcul des stats pour les données mockées
+          const mockAssigned = mockDeliveries.filter(d => d.status === 'assigned').length;
+          const mockInProgress = mockDeliveries.filter(d => d.status === 'in_progress').length;
+          const mockCompleted = mockDeliveries.filter(d =>
+            ['delivered', 'transferred'].includes(d.status)
+          ).length;
+
           setStats({
-            pending: 3,
-            inProgress: 0,
-            completed: 15,
-            totalDeliveries: 18
+            pending: 0,
+            assigned: mockAssigned, // 1 dans les données mockées
+            inProgress: mockInProgress, // 1 dans les données mockées
+            completed: mockCompleted,
+            failed: 0,
+            cancelled: 0,
+            totalDeliveries: mockDeliveries.length
           });
         }
       }
@@ -82,13 +115,15 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
     }
   };
 
+  // Remplacer cette fonction :
   const handleAcceptDelivery = async (deliveryId, e) => {
     e.stopPropagation(); // Empêche l'ouverture des détails
-    
+
     try {
+      // Utiliser la méthode mise à jour de l'API
       const result = await apiService.deliveries.acceptDelivery(deliveryId);
       if (result.success) {
-        // Rafraîchir la liste
+        // Le statut devrait maintenant être "in_progress"
         fetchDeliveriesAndStats();
         // Notification ou toast
         alert('Livraison acceptée avec succès !');
@@ -102,7 +137,7 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
 
   const handleStartDelivery = async (deliveryId, e) => {
     e.stopPropagation();
-    
+
     try {
       const result = await apiService.deliveries.startDelivery(deliveryId);
       if (result.success) {
@@ -117,16 +152,19 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
   const getStatusBadge = (status) => {
     const statusConfig = {
       'pending': { text: 'En attente', color: 'bg-yellow-100 text-yellow-800', icon: Clock },
-      'assigned': { text: 'Assignée', color: 'bg-blue-100 text-blue-800', icon: Package },
-      'accepted': { text: 'Acceptée', color: 'bg-purple-100 text-purple-800', icon: CheckCircle },
+      // Dans getStatusBadge, pour 'assigned':
+      'assigned': { text: 'À démarrer', color: 'bg-blue-100 text-blue-800', icon: Package },
       'in_progress': { text: 'En cours', color: 'bg-orange-100 text-orange-800', icon: Truck },
+      'issue_reported': { text: 'Problème signalé', color: 'bg-red-100 text-red-800', icon: AlertCircle },
       'delivered': { text: 'Livrée', color: 'bg-green-100 text-green-800', icon: CheckCircle },
-      'transferred': { text: 'Transférée', color: 'bg-indigo-100 text-indigo-800', icon: Truck }
+      'transferred': { text: 'Transférée', color: 'bg-indigo-100 text-indigo-800', icon: Truck },
+      'failed': { text: 'Échouée', color: 'bg-gray-100 text-gray-800', icon: AlertCircle },
+      'cancelled': { text: 'Annulée', color: 'bg-gray-100 text-gray-800', icon: AlertCircle }
     };
 
     const config = statusConfig[status] || { text: status, color: 'bg-gray-100 text-gray-800', icon: AlertCircle };
     const Icon = config.icon;
-    
+
     return (
       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${config.color}`}>
         <Icon size={12} className="mr-1" />
@@ -138,21 +176,13 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
   const getActionButton = (delivery) => {
     switch (delivery.status) {
       case 'assigned':
-        return (
-          <button
-            onClick={(e) => handleAcceptDelivery(delivery.id, e)}
-            className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl font-medium text-sm active:scale-95 transition-transform shadow-sm"
-          >
-            Accepter
-          </button>
-        );
-      case 'accepted':
+        // Le livreur commence directement la livraison sans "accepter"
         return (
           <button
             onClick={(e) => handleStartDelivery(delivery.id, e)}
-            className="px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl font-medium text-sm active:scale-95 transition-transform shadow-sm"
+            className="px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-xl font-medium text-sm active:scale-95 transition-transform shadow-sm"
           >
-            Démarrer
+            Démarrer la livraison
           </button>
         );
       case 'in_progress':
@@ -161,14 +191,39 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
             onClick={() => onSelectDelivery(delivery)}
             className="px-4 py-2 bg-gradient-to-r from-orange-500 to-orange-600 text-white rounded-xl font-medium text-sm active:scale-95 transition-transform shadow-sm"
           >
-            En cours
+            Continuer
+          </button>
+        );
+      case 'issue_reported':
+        return (
+          <button
+            onClick={() => onSelectDelivery(delivery)}
+            className="px-4 py-2 bg-gradient-to-r from-red-500 to-red-600 text-white rounded-xl font-medium text-sm active:scale-95 transition-transform shadow-sm"
+          >
+            Résoudre le problème
+          </button>
+        );
+      case 'delivered':
+      case 'transferred':
+        return (
+          <button
+            onClick={() => onSelectDelivery(delivery)}
+            className="px-4 py-2 bg-gradient-to-r from-green-500 to-green-600 text-white rounded-xl font-medium text-sm active:scale-95 transition-transform shadow-sm"
+          >
+            Voir les détails
           </button>
         );
       default:
-        return null;
+        return (
+          <button
+            onClick={() => onSelectDelivery(delivery)}
+            className="px-4 py-2 border border-gray-300 text-gray-700 rounded-xl font-medium text-sm active:scale-95 transition-transform"
+          >
+            Détails
+          </button>
+        );
     }
   };
-
   if (loading) {
     return (
       <div className="h-full overflow-y-auto pb-24" style={{ backgroundColor: '#f2f2f7' }}>
@@ -212,8 +267,8 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
     );
   }
 
-  const pendingDeliveries = deliveries.filter(d => 
-    ['pending', 'assigned', 'accepted', 'in_progress'].includes(d.status)
+  const pendingDeliveries = deliveries.filter(d =>
+    ['assigned', 'in_progress', 'issue_reported'].includes(d.status)
   );
 
   return (
@@ -226,6 +281,7 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
 
       <div className="px-4 pt-4">
         {/* Statistiques rapides */}
+        {/* Statistiques rapides */}
         <div className="grid grid-cols-2 gap-3 mb-4">
           <div className="bg-white rounded-2xl p-4 shadow-sm">
             <div className="flex items-center justify-between mb-2">
@@ -236,20 +292,20 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
             </div>
             <div className="text-2xl font-bold text-gray-900">{stats.inProgress}</div>
           </div>
-          
+
           <div className="bg-white rounded-2xl p-4 shadow-sm">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-gray-500 text-sm">En attente</span>
+              <span className="text-gray-500 text-sm">Assignées</span>
               <div className="w-6 h-6 rounded-full bg-blue-100 flex items-center justify-center">
-                <Clock size={14} className="text-blue-600" />
+                <Package size={14} className="text-blue-600" />
               </div>
             </div>
-            <div className="text-2xl font-bold text-gray-900">{stats.pending}</div>
+            <div className="text-2xl font-bold text-gray-900">{stats.assigned}</div>
           </div>
         </div>
 
         {/* Carte de revenus - Design premium */}
-        <div className="mb-6 rounded-3xl overflow-hidden shadow-lg" style={{ 
+        <div className="mb-6 rounded-3xl overflow-hidden shadow-lg" style={{
           background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)'
         }}>
           <div className="p-6">
@@ -307,12 +363,11 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
               <h2 className="font-semibold text-gray-700">À livrer aujourd'hui</h2>
               <span className="text-sm text-gray-500">{pendingDeliveries.length} au total</span>
             </div>
-            
+
             {pendingDeliveries.map(delivery => {
-              const pendingPackages = delivery.packages?.filter(p => 
-                ['pending', 'in_transit'].includes(p.status)
+              const pendingPackages = delivery.packages?.filter(p =>
+                ['pending', 'picked_up', 'in_transit'].includes(p.status)
               ) || [];
-              
               const deliveryAmount = pendingPackages.reduce((sum, pkg) => sum + (pkg.amount || 0), 0);
 
               return (
@@ -345,13 +400,13 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
                         📞 {delivery.clientInfo?.phone || delivery.phone || 'Téléphone non disponible'}
                       </p>
                     </div>
-                    <ChevronRight 
-                      size={20} 
+                    <ChevronRight
+                      size={20}
                       className="text-gray-400 ml-2 flex-shrink-0 cursor-pointer"
                       onClick={() => onSelectDelivery(delivery)}
                     />
                   </div>
-                  
+
                   {/* Informations colis */}
                   <div className="flex items-center justify-between pt-3 border-t border-gray-100 mb-3">
                     <div className="flex items-center">
@@ -380,7 +435,7 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
                       )}
                     </div>
                   </div>
-                  
+
                   {/* Actions */}
                   <div className="flex justify-between items-center pt-3 border-t border-gray-100">
                     <button
@@ -393,41 +448,42 @@ const HomeTab = ({ deliveries: initialDeliveries, onSelectDelivery, totalAmount:
                       {getActionButton(delivery)}
                     </div>
                   </div>
-                  
+
                   {/* Bouton upload reçu pour les transferts */}
-                  {delivery.deliveryType === 'transfer' && delivery.status === 'accepted' && (
-                    <div className="mt-3 pt-3 border-t border-dashed border-gray-200">
-                      <button
-                        onClick={() => {
-                          // Ici vous pourriez ouvrir un modal d'upload
-                          const fileInput = document.createElement('input');
-                          fileInput.type = 'file';
-                          fileInput.accept = 'image/*,.pdf';
-                          fileInput.onchange = async (e) => {
-                            const file = e.target.files[0];
-                            if (file) {
-                              try {
-                                const result = await apiService.deliveries.uploadTransferReceipt(delivery.id, file);
-                                if (result.success) {
-                                  alert('Reçu uploadé avec succès !');
-                                  fetchDeliveriesAndStats();
+                  {/* Bouton upload reçu pour les transferts */}
+                  {delivery.deliveryType === 'transfer' &&
+                    (delivery.status === 'in_progress' || delivery.status === 'issue_reported') && (
+                      <div className="mt-3 pt-3 border-t border-dashed border-gray-200">
+                        <button
+                          onClick={() => {
+                            const fileInput = document.createElement('input');
+                            fileInput.type = 'file';
+                            fileInput.accept = 'image/*,.pdf';
+                            fileInput.onchange = async (e) => {
+                              const file = e.target.files[0];
+                              if (file) {
+                                try {
+                                  const result = await apiService.deliveries.uploadTransferReceipt(delivery.id, file);
+                                  if (result.success) {
+                                    alert('Reçu uploadé avec succès !');
+                                    fetchDeliveriesAndStats();
+                                  }
+                                } catch (error) {
+                                  alert(error.message);
                                 }
-                              } catch (error) {
-                                alert(error.message);
                               }
-                            }
-                          };
-                          fileInput.click();
-                        }}
-                        className="w-full px-4 py-2 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-xl font-medium text-sm active:scale-95 transition-transform shadow-sm flex items-center justify-center gap-2"
-                      >
-                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                        </svg>
-                        Uploader reçu de transfert
-                      </button>
-                    </div>
-                  )}
+                            };
+                            fileInput.click();
+                          }}
+                          className="w-full px-4 py-2 bg-gradient-to-r from-indigo-500 to-indigo-600 text-white rounded-xl font-medium text-sm active:scale-95 transition-transform shadow-sm flex items-center justify-center gap-2"
+                        >
+                          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                          </svg>
+                          Uploader reçu
+                        </button>
+                      </div>
+                    )}
                 </div>
               );
             })}

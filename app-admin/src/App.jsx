@@ -1,6 +1,7 @@
+// App.jsx
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { NotificationProvider } from './context/NotificationContext'; // Ajouté
+import { NotificationProvider } from './context/NotificationContext';
 import Sidebar from './components/layout/Sidebar';
 import Header from './components/layout/Header';
 
@@ -12,13 +13,12 @@ import DeliveryMenPage from './components/pages/DeliveryMenPage';
 import CreateDeliveryPage from './components/pages/CreateDeliveryPage';
 import TrackingPage from './components/pages/TrackingPage';
 import ProfilePage from './components/pages/ProfilePage';
+import SettlementsPage from './components/pages/SettlementsPage'; // <--- NOUVEL IMPORT
 
 // Import des composants supplémentaires
 import DeliveryManDetails from './components/pages/DeliveryManDetails';
 import AssignDeliveryPage from './components/pages/AssignDeliveryPage';
-
-// Import du badge de notification pour admin
-import AdminNotificationBadge from './components/common/AdminNotificationBadge'; // À créer si nécessaire
+import AdminNotificationBadge from './components/common/AdminNotificationBadge';
 
 // Composant principal de l'application
 const AppContent = () => {
@@ -80,6 +80,9 @@ const AppContent = () => {
       case 'deliverymen':
         return <DeliveryMenPage onNavigate={handleNavigate} />;
       
+      case 'settlements': // <--- NOUVELLE CASE POUR LA NAVIGATION
+        return <SettlementsPage />;
+
       case 'deliveryman-details':
         return (
           <DeliveryManDetails
@@ -121,6 +124,7 @@ const AppContent = () => {
     'dashboard': 'Tableau de bord',
     'deliveries': 'Gestion des Livraisons',
     'deliverymen': 'Gestion des Livreurs',
+    'settlements': 'Caisse & Versements', // <--- NOUVEAU TITRE
     'deliveryman-details': 'Détails du Livreur',
     'assign-delivery': 'Assigner une Livraison',
     'assign-delivery-quick': 'Assigner une Livraison',
@@ -147,14 +151,11 @@ const AppContent = () => {
 
       {/* Contenu principal */}
       <div className="lg:ml-64 transition-all duration-300">
-        {/* Header modifié pour inclure le badge de notification */}
         <Header
           onMenuClick={() => setSidebarOpen(true)}
           title={pageTitles[currentPage] || 'Tableau de bord'}
-          // Ajouter des éléments supplémentaires au header
           additionalElements={
             <div className="flex items-center space-x-4">
-              {/* Badge de notification pour admin */}
               <AdminNotificationBadge />
             </div>
           }
@@ -167,7 +168,6 @@ const AppContent = () => {
           </div>
         </main>
 
-        {/* Footer optionnel */}
         <footer className="border-t bg-white py-4 px-6 lg:ml-64">
           <div className="max-w-7xl mx-auto">
             <div className="flex flex-col md:flex-row justify-between items-center text-sm text-gray-600">
@@ -187,7 +187,6 @@ const AppContent = () => {
   );
 };
 
-// Composant principal avec Providers imbriqués
 const App = () => {
   return (
     <AuthProvider>
