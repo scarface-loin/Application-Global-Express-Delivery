@@ -1,6 +1,6 @@
 // src/pages/logic/SettlementsPageLogic.js
 import { useState, useEffect } from 'react';
-import adminApi from '../../../services/adminApi'; // Assure-toi que le chemin est bon
+import adminApi from '../../../services/adminApi';
 
 export const useSettlementsLogic = () => {
   const [drivers, setDrivers] = useState([]);
@@ -13,6 +13,11 @@ export const useSettlementsLogic = () => {
   const [detailsLoading, setDetailsLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
   
+  // ✨ NOUVEAU : États pour le formulaire de versement
+  const [amountCollected, setAmountCollected] = useState('');
+  const [confirmReturns, setConfirmReturns] = useState(true);
+  const [showValidationForm, setShowValidationForm] = useState(false);
+  
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
@@ -22,7 +27,6 @@ export const useSettlementsLogic = () => {
     setErrorMsg('');
     try {
       const response = await adminApi.reconciliation.getDriversWithBalance();
-      // Selon ta doc, les livreurs sont dans response.data
       setDrivers(response.data || []);
     } catch (error) {
       console.error("Erreur chargement livreurs:", error);
@@ -42,28 +46,27 @@ export const useSettlementsLogic = () => {
     setShowSettleModal(true);
     setDetailsLoading(true);
     setDriverDetails(null);
+    setShowValidationForm(false); // Réinitialiser le formulaire
+    setAmountCollected(''); // Réinitialiser le montant
     
     try {
       const response = await adminApi.reconciliation.getDriverDetails(driver.driverId || driver.id);
-      // Selon ta doc, les détails sont dans response.data
-      
-      // Adaptation du format pour l'affichage si nécessaire
       const rawData = response.data;
       
-      // On structure les données pour faciliter l'affichage dans le modal
       setDriverDetails({
-        summary: rawData.summary,
-        deliveries: rawData.cashDetails.map(d => ({
-          id: d.deliveryId,
-          client: d.clientName,
-          amount: d.amount,
-          type: d.deliveryType
-        })),
-        returns: rawData.returnDetails.map(r => ({
-          tracking: r.trackingNumber,
-          reason: r.reason,
-          status: r.status
-        }))
+        driverId: rawData.driverId,
+        driverName: rawData.name,
+        driverPhone: rawData.phone,
+        driverMatricule: rawData.matricule,
+        summary: {
+          totalCash: rawData.summary.totalCash,
+          deliveredCount: rawData.summary.deliveredCount,
+          pendingReturns: rawData.summary.pendingReturns,
+          currentDebt: rawData.summary.currentDebt,
+          pendingRequest: rawData.summary.pendingRequest
+        },
+        cashDetails: rawData.cashDetails || [],
+        returnDetails: rawData.returnDetails || []
       });
 
     } catch (error) {
@@ -79,46 +82,120 @@ export const useSettlementsLogic = () => {
     setShowSettleModal(false);
     setSelectedDriver(null);
     setDriverDetails(null);
+    setAmountCollected('');
+    setShowValidationForm(false);
+    setConfirmReturns(true);
   };
 
-  // 3. Confirmer le versement (Appel POST /settle)
+  // ✨ NOUVEAU : Afficher le formulaire de validation
+  const handleShowValidationForm = () => {
+    setShowValidationForm(true);
+    // Pré-remplir avec le montant attendu (optionnel)
+    setAmountCollected(driverDetails?.summary?.totalCash?.toString() || '');
+  };
+
+  // ✨ NOUVEAU : Calculer la différence
+  const calculateDifference = () => {
+    if (!driverDetails || !amountCollected) return 0;
+    const expected = driverDetails.summary.totalCash;
+    const collected = parseFloat(amountCollected) || 0;
+    return expected - collected;
+  };
+
+  // 3. Confirmer le versement avec montant saisi par l'admin
   const handleConfirmSettlement = async () => {
     if (!selectedDriver || !driverDetails) return;
     
+    // Validation du montant
+    if (!amountCollected || parseFloat(amountCollected) < 0) {
+      alert("Veuillez entrer un montant valide.");
+      return;
+    }
+
+    const collected = parseFloat(amountCollected);
+    const expected = driverDetails.summary.totalCash;
+    const difference = expected - collected;
+
+    // ✨ Confirmation si différence importante
+    if (Math.abs(difference) > 0) {
+      const confirmMsg = difference > 0 
+        ? `⚠️ ATTENTION : Le montant collecté (${formatAmount(collected)}) est INFÉRIEUR au montant attendu (${formatAmount(expected)}).\n\nDIFFÉRENCE : ${formatAmount(difference)}\n\nCette différence sera enregistrée comme DETTE et prélevée sur le salaire du livreur.\n\nVoulez-vous continuer ?`
+        : `ℹ️ Le montant collecté (${formatAmount(collected)}) est SUPÉRIEUR au montant attendu (${formatAmount(expected)}).\n\nEXCÉDENT : ${formatAmount(Math.abs(difference))}\n\nVoulez-vous continuer ?`;
+      
+      if (!window.confirm(confirmMsg)) {
+        return;
+      }
+    }
+    
     setProcessing(true);
     try {
-      // Préparation du body selon ta doc
       const payload = {
         driverId: selectedDriver.driverId || selectedDriver.id,
-        amountCollected: driverDetails.summary.totalCash, // On prend le montant calculé par le système
-        confirmReturns: true // Par défaut on valide aussi les retours
+        amountCollected: collected,
+        confirmReturns
       };
 
-      await adminApi.reconciliation.settleDriver(payload);
+      const response = await adminApi.reconciliation.settleDriver(payload);
       
-      setSuccessMsg(`Versement de ${formatAmount(payload.amountCollected)} validé avec succès.`);
+      // ✨ Message personnalisé selon qu'il y a une dette ou non
+      if (response.data.debtGenerated > 0) {
+        setSuccessMsg(
+          `✅ Versement validé avec succès !\n\n` +
+          `Montant collecté : ${formatAmount(collected)}\n` +
+          `⚠️ Dette enregistrée : ${formatAmount(response.data.debtGenerated)}\n` +
+          `Dette totale du livreur : ${formatAmount(response.data.newTotalDebt)}\n\n` +
+          `Cette dette sera prélevée sur le salaire du livreur.`
+        );
+      } else {
+        setSuccessMsg(
+          `✅ Versement de ${formatAmount(collected)} validé avec succès !\n` +
+          (difference < 0 ? `\nExcédent de ${formatAmount(Math.abs(difference))} enregistré.` : '')
+        );
+      }
       
-      // Fermer le modal et rafraîchir la liste
       handleCloseModal();
-      loadDrivers(); // Recharger la liste pour faire disparaître le livreur traité
+      loadDrivers(); // Recharger la liste
       
-      // Nettoyer le message après 5 sec
-      setTimeout(() => setSuccessMsg(''), 5000);
+      // Nettoyer le message après 8 secondes
+      setTimeout(() => setSuccessMsg(''), 8000);
 
     } catch (error) {
       console.error("Erreur lors du versement:", error);
-      // Afficher l'erreur renvoyée par l'API (ex: montant incorrect)
-      alert(error.message || "Erreur lors de la validation du versement.");
+      const errorMessage = error.response?.data?.error || error.message || "Erreur lors de la validation du versement.";
+      setErrorMsg(errorMessage);
+      
+      // Nettoyer l'erreur après 5 secondes
+      setTimeout(() => setErrorMsg(''), 5000);
     } finally {
       setProcessing(false);
     }
   };
 
+  // ✨ NOUVEAU : Formater les montants
   const formatAmount = (amount) => {
-    return new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'XOF' }).format(amount);
+    if (amount === null || amount === undefined) return '0 XAF';
+    return new Intl.NumberFormat('fr-FR', { 
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0 
+    }).format(amount) + ' XAF';
+  };
+
+  // ✨ NOUVEAU : Valider le montant saisi
+  const isValidAmount = () => {
+    const collected = parseFloat(amountCollected);
+    return !isNaN(collected) && collected >= 0;
+  };
+
+  // ✨ NOUVEAU : Obtenir le style d'alerte selon la différence
+  const getDifferenceAlertType = () => {
+    const diff = calculateDifference();
+    if (diff > 0) return 'warning'; // Dette
+    if (diff < 0) return 'info'; // Excédent
+    return 'success'; // Montant exact
   };
 
   return {
+    // États de base
     drivers,
     loading,
     selectedDriver,
@@ -128,9 +205,25 @@ export const useSettlementsLogic = () => {
     processing,
     successMsg,
     errorMsg,
+    
+    // ✨ NOUVEAUX : États du formulaire
+    amountCollected,
+    setAmountCollected,
+    confirmReturns,
+    setConfirmReturns,
+    showValidationForm,
+    
+    // ✨ NOUVEAUX : Fonctions utilitaires
+    calculateDifference,
+    isValidAmount,
+    getDifferenceAlertType,
+    
+    // Fonctions d'action
     setSuccessMsg,
+    setErrorMsg,
     handleOpenSettleModal,
     handleCloseModal,
+    handleShowValidationForm,
     handleConfirmSettlement,
     formatAmount,
     refreshData: loadDrivers

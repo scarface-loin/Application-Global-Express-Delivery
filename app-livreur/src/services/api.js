@@ -5,7 +5,7 @@
  */
 
 // Configuration
-const API_BASE_URL = 'http://localhost:3001/api';
+const API_BASE_URL = 'https://application-global-express-delivery-back.onrender.com/api';
 
 // Service de gestion des tokens
 const tokenService = {

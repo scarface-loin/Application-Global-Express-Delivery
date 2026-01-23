@@ -14,6 +14,8 @@ import CreateDeliveryPage from './components/pages/CreateDeliveryPage';
 import TrackingPage from './components/pages/TrackingPage';
 import ProfilePage from './components/pages/ProfilePage';
 import SettlementsPage from './components/pages/SettlementsPage'; // <--- NOUVEL IMPORT
+// Import
+import DebtsManagementPage from './components/pages/DebtsManagementPage';
 
 // Import des composants supplémentaires
 import DeliveryManDetails from './components/pages/DeliveryManDetails';
@@ -32,7 +34,7 @@ const AppContent = () => {
   // Fonction de navigation
   const handleNavigate = (page, data) => {
     setCurrentPage(page);
-    
+
     // Gérer les données spécifiques selon la page
     switch (page) {
       case 'deliveryman-details':
@@ -60,7 +62,7 @@ const AppContent = () => {
       'assign-delivery': 'deliveries',
       'assign-delivery-quick': 'deliveries',
     };
-    
+
     if (backMap[currentPage]) {
       setCurrentPage(backMap[currentPage]);
     } else {
@@ -73,13 +75,13 @@ const AppContent = () => {
     switch (currentPage) {
       case 'dashboard':
         return <Dashboard />;
-      
+
       case 'deliveries':
         return <DeliveriesPage onNavigate={handleNavigate} />;
-      
+
       case 'deliverymen':
         return <DeliveryMenPage onNavigate={handleNavigate} />;
-      
+
       case 'settlements': // <--- NOUVELLE CASE POUR LA NAVIGATION
         return <SettlementsPage />;
 
@@ -93,7 +95,7 @@ const AppContent = () => {
             }}
           />
         );
-      
+
       case 'assign-delivery':
         return (
           <AssignDeliveryPage
@@ -104,16 +106,21 @@ const AppContent = () => {
             }}
           />
         );
-      
+
       case 'create-delivery':
         return <CreateDeliveryPage />;
-      
+
       case 'tracking':
         return <TrackingPage />;
-      
+
       case 'profile':
         return <ProfilePage />;
-      
+
+
+      case 'debts':
+        return <DebtsManagementPage />;
+
+
       default:
         return <Dashboard />;
     }
@@ -131,6 +138,7 @@ const AppContent = () => {
     'create-delivery': 'Créer une Livraison',
     'tracking': 'Suivi de Colis',
     'profile': 'Mon Profil',
+    'debts': 'Gestion des Dettes',
   };
 
   // Si pas de token, afficher la page de connexion
