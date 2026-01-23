@@ -7,7 +7,7 @@ import Header from './components/layout/Header';
 
 // Import des pages
 import LoginPage from './components/pages/LoginPage';
-import Dashboard from './components/pages/Dashboard';
+import Dashboard from './components/common/Dashboard';
 import DeliveriesPage from './components/pages/DeliveriesPage';
 import DeliveryMenPage from './components/pages/DeliveryMenPage';
 import CreateDeliveryPage from './components/pages/CreateDeliveryPage';

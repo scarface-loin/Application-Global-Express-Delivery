@@ -1,18 +1,19 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  FiPackage, 
-  FiClock, 
-  FiTruck, 
-  FiCheckCircle, 
-  FiUsers, 
+import {
+  FiPackage,
+  FiClock,
+  FiTruck,
+  FiCheckCircle,
+  FiUsers,
   FiDollarSign,
   FiPlus,
   FiFilter,
   FiSearch
 } from 'react-icons/fi';
-import Card from '../common/Card';
-import Badge from '../common/Badge';
-import LoadingSpinner from '../common/LoadingSpinner';
+import Card from './Card';
+import Badge from './Badge';
+import DeliveryLoader from './DeliveryLoader';
+import motoGif from '../../assets/moto-livraison.gif';
 import { apiRequest } from '../../services/api';
 
 export const Dashboard = () => {
@@ -37,7 +38,7 @@ export const Dashboard = () => {
         ]);
 
         setRecentDeliveries(deliveries.data || []);
-        
+
         if (statsData) {
           setStats(statsData);
         } else {
@@ -45,7 +46,7 @@ export const Dashboard = () => {
           const pending = deliveries.data?.filter(d => d.status === 'pending').length || 0;
           const inProgress = deliveries.data?.filter(d => d.status === 'in_progress').length || 0;
           const delivered = deliveries.data?.filter(d => d.status === 'delivered').length || 0;
-          
+
           setStats({
             total,
             pending,
@@ -110,7 +111,14 @@ export const Dashboard = () => {
     },
   ];
 
-  if (loading) return <LoadingSpinner />;
+  if (loading) {
+    return (
+      <DeliveryLoader
+        gifUrl={motoGif}
+        onLoadingComplete={() => setLoading(false)}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -153,8 +161,8 @@ export const Dashboard = () => {
                       <span className="font-medium">Livraison #{delivery._id?.slice(-6)}</span>
                       <Badge type={
                         delivery.status === 'delivered' ? 'success' :
-                        delivery.status === 'in_progress' ? 'info' :
-                        delivery.status === 'pending' ? 'warning' : 'default'
+                          delivery.status === 'in_progress' ? 'info' :
+                            delivery.status === 'pending' ? 'warning' : 'default'
                       }>
                         {delivery.status}
                       </Badge>
@@ -176,25 +184,25 @@ export const Dashboard = () => {
         </Card>
         <Card title="Actions Rapides">
           <div className="space-y-2">
-            <button 
+            <button
               onClick={() => window.location.hash = '#create-delivery'}
               className="w-full flex items-center gap-3 text-left px-4 py-3 rounded-lg bg-blue-50 hover:bg-blue-100 transition-colors text-blue-700"
             >
               <FiPlus /> Créer une nouvelle livraison
             </button>
-            <button 
+            <button
               onClick={() => window.location.hash = '#deliverymen'}
               className="w-full flex items-center gap-3 text-left px-4 py-3 rounded-lg bg-green-50 hover:bg-green-100 transition-colors text-green-700"
             >
               <FiUsers /> Ajouter un livreur
             </button>
-            <button 
+            <button
               onClick={() => window.location.hash = '#tracking'}
               className="w-full flex items-center gap-3 text-left px-4 py-3 rounded-lg bg-purple-50 hover:bg-purple-100 transition-colors text-purple-700"
             >
               <FiSearch /> Suivre un colis
             </button>
-            <button 
+            <button
               className="w-full flex items-center gap-3 text-left px-4 py-3 rounded-lg bg-yellow-50 hover:bg-yellow-100 transition-colors text-yellow-700"
             >
               <FiFilter /> Voir les rapports
