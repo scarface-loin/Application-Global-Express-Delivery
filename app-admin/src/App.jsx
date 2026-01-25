@@ -1,4 +1,4 @@
-// App.jsx
+// App.jsx - modifications
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { NotificationProvider } from './context/NotificationContext';
@@ -13,9 +13,9 @@ import DeliveryMenPage from './components/pages/DeliveryMenPage';
 import CreateDeliveryPage from './components/pages/CreateDeliveryPage';
 import TrackingPage from './components/pages/TrackingPage';
 import ProfilePage from './components/pages/ProfilePage';
-import SettlementsPage from './components/pages/SettlementsPage'; // <--- NOUVEL IMPORT
-// Import
+import SettlementsPage from './components/pages/SettlementsPage';
 import DebtsManagementPage from './components/pages/DebtsManagementPage';
+import ValidationPage from './components/pages/ValidationPage'; // <--- NOUVEL IMPORT
 
 // Import des composants supplémentaires
 import DeliveryManDetails from './components/pages/DeliveryManDetails';
@@ -82,8 +82,14 @@ const AppContent = () => {
       case 'deliverymen':
         return <DeliveryMenPage onNavigate={handleNavigate} />;
 
-      case 'settlements': // <--- NOUVELLE CASE POUR LA NAVIGATION
+      case 'settlements':
         return <SettlementsPage />;
+
+      case 'debts':
+        return <DebtsManagementPage />;
+
+      case 'validation': // <--- NOUVELLE CASE
+        return <ValidationPage />;
 
       case 'deliveryman-details':
         return (
@@ -116,11 +122,6 @@ const AppContent = () => {
       case 'profile':
         return <ProfilePage />;
 
-
-      case 'debts':
-        return <DebtsManagementPage />;
-
-
       default:
         return <Dashboard />;
     }
@@ -131,14 +132,15 @@ const AppContent = () => {
     'dashboard': 'Tableau de bord',
     'deliveries': 'Gestion des Livraisons',
     'deliverymen': 'Gestion des Livreurs',
-    'settlements': 'Caisse & Versements', // <--- NOUVEAU TITRE
+    'settlements': 'Caisse & Versements',
+    'debts': 'Gestion des Dettes',
+    'validation': 'Validation des Livraisons', // <--- NOUVEAU TITRE
     'deliveryman-details': 'Détails du Livreur',
     'assign-delivery': 'Assigner une Livraison',
     'assign-delivery-quick': 'Assigner une Livraison',
     'create-delivery': 'Créer une Livraison',
     'tracking': 'Suivi de Colis',
     'profile': 'Mon Profil',
-    'debts': 'Gestion des Dettes',
   };
 
   // Si pas de token, afficher la page de connexion

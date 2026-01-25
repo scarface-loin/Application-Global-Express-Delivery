@@ -17,7 +17,7 @@ import Badge from '../common/Badge';
 import LoadingSpinner from '../common/LoadingSpinner';
 import Alert from '../common/Alert';
 import Modal from '../common/Modal';
-import { useSettlementsLogic } from './logic/SettlementsPageLogic';
+//import { useSettlementsLogic } from './logic/SettlementsPageLogic';
 
 const SettlementsPage = () => {
   const {

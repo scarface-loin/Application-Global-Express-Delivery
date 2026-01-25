@@ -1,4 +1,4 @@
-// src/components/layout/Sidebar.jsx
+// src/components/layout/Sidebar.jsx - modifications
 import React from 'react';
 import {
   FiHome,
@@ -9,8 +9,9 @@ import {
   FiTruck,
   FiPlus,
   FiSearch,
-  FiDollarSign,// <--- AJOUTER ICI
-  FiAlertTriangle 
+  FiDollarSign,
+  FiAlertTriangle,
+  FiCheckCircle // <--- AJOUTER ICI
 } from 'react-icons/fi';
 import { useAuth } from '../../context/AuthContext';
 
@@ -19,14 +20,16 @@ export const Sidebar = ({ isOpen, onClose, currentPage, setCurrentPage }) => {
 
   const menuItems = [
     { id: 'dashboard', label: 'Tableau de bord', icon: <FiHome /> },
-    { id: 'deliveries', label: 'Livraisons', icon: <FiPackage /> },
+    { id: 'deliveries', label: 'course du jours', icon: <FiPackage /> },
     { id: 'deliverymen', label: 'Livreurs', icon: <FiUsers /> },
     { id: 'settlements', label: 'Caisse & Versements', icon: <FiDollarSign /> },
-    { id: 'debts', label: 'Gestion des Dettes', icon: <FiAlertTriangle /> }, // ✨ NOUVEAU
+    { id: 'debts', label: 'Gestion des Dettes', icon: <FiAlertTriangle /> },
+    { id: 'validation', label: 'Validation', icon: <FiCheckCircle /> }, // <--- NOUVEAU
     { id: 'create-delivery', label: 'Créer Livraison', icon: <FiPlus /> },
     { id: 'tracking', label: 'Suivi Colis', icon: <FiSearch /> },
     { id: 'profile', label: 'Mon Profil', icon: <FiUser /> },
   ];
+
   return (
     <>
       {/* Overlay mobile */}

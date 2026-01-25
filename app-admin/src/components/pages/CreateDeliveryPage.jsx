@@ -1,593 +1,321 @@
-import React from 'react';
-import { MdLocalShipping, MdTransferWithinAStation } from 'react-icons/md';
-import { FiPlus, FiTrash2, FiCheck, FiCopy } from 'react-icons/fi';
-import Card from '../common/Card';
-import Input from '../common/Input';
-import TextArea from '../common/TextArea';
-import Button from '../common/Button';
-import Alert from '../common/Alert';
-import { useDeliveryLogic } from './logic/CreateDeliveryPageLogic';
-import { useNotification } from '../../context/NotificationContext';
+import React, { useState } from 'react';
+import { FiPlus, FiTrash2, FiCheck, FiPackage } from 'react-icons/fi';
 
-export const CreateDeliveryPage = () => {
-  // Récupérer le contexte de notification
-  const notificationContext = useNotification();
-  
-  const {
-    deliveryType,
-    setDeliveryType,
-    packages,
-    clientInfo,
-    notes,
-    loading,
-    error,
-    success,
-    addPackage,
-    removePackage,
-    updatePackage,
-    handleSubmit,
-    calculateTotal,
-    handleClientInfoChange,
-    setNotes,
-    resetForm,
-    duplicatePackage,
-    calculateTotalWeight,
-    formatPhoneNumber,
-    isFormValid,
-    getFormSummary,
-    notify,
-    broadcastToAdmins
-  } = useDeliveryLogic(useNotification);
+export default function CreateDeliveryPage() {
+  const [deliveryType, setDeliveryType] = useState('course');
+  const [formData, setFormData] = useState({
+    quartier: '',
+    numeroDestinataire: '',
+    coutLivraison: '',
+  });
+  const [articles, setArticles] = useState([
+    { id: 1, nom: '', quantite: '', cout: '' }
+  ]);
+  const [loading, setLoading] = useState(false);
 
-  // Fonction pour formater l'affichage du téléphone
-  const formatDisplayPhone = (phone) => {
-    if (!phone) return phone;
-    return formatPhoneNumber(phone);
+  const addArticle = () => {
+    setArticles([...articles, { 
+      id: Date.now(), 
+      nom: '', 
+      quantite: '', 
+      cout: '' 
+    }]);
   };
 
-  // Fonction pour tester la notification (debug)
-  const testNotification = () => {
-    if (notificationContext) {
-      const typeText = deliveryType === 'transfer' ? 'Transfert' : 'Livraison';
-      notificationContext.notifyDeliverySuccess(
-        deliveryType,
-        'TEST-123456',
-        {
-          duration: 5000,
-          title: `Test ${typeText} Réussie`
-        }
-      );
-      
-      notify('Notification de test envoyée !', 'info', { duration: 3000 });
+  const removeArticle = (id) => {
+    if (articles.length > 1) {
+      setArticles(articles.filter(article => article.id !== id));
     }
   };
 
-  // Fonction pour copier les informations client dans tous les colis
-  const copyClientToAllPackages = () => {
-    if (!clientInfo.name || !clientInfo.phone) {
-      notify('Veuillez d\'abord remplir les informations client', 'warning', { duration: 4000 });
+  const updateArticle = (id, field, value) => {
+    setArticles(articles.map(article => 
+      article.id === id ? { ...article, [field]: value } : article
+    ));
+  };
+
+  const calculateArticlesTotal = () => {
+    return articles.reduce((sum, article) => {
+      const quantite = parseFloat(article.quantite) || 0;
+      const cout = parseFloat(article.cout) || 0;
+      return sum + (quantite * cout);
+    }, 0);
+  };
+
+  const calculateGrandTotal = () => {
+    const articlesTotal = calculateArticlesTotal();
+    const livraisonCout = parseFloat(formData.coutLivraison) || 0;
+    return articlesTotal + livraisonCout;
+  };
+
+  const isFormValid = () => {
+    const hasBasicInfo = formData.quartier && formData.numeroDestinataire && formData.coutLivraison;
+    const hasValidArticles = articles.every(a => a.nom && a.quantite && a.cout);
+    return hasBasicInfo && hasValidArticles;
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!isFormValid()) {
+      alert('Veuillez remplir tous les champs obligatoires');
       return;
     }
 
-    const updatedPackages = packages.map(pkg => ({
-      ...pkg,
-      recipient: clientInfo.name,
-      recipientPhone: clientInfo.phone
-    }));
+    setLoading(true);
     
-    // Note: Vous aurez besoin d'ajouter cette fonction dans votre logique
-    // setPackages(updatedPackages);
-    
-    notify('Informations client copiées dans tous les colis', 'success', { duration: 3000 });
-  };
-
-  // Fonction pour afficher un résumé avant soumission
-  const showSummary = () => {
-    const summary = getFormSummary?.();
-    if (summary) {
-      const message = `
-        Type: ${summary.deliveryType}
-        Client: ${summary.client}
-        Colis: ${summary.packagesCount}
-        Total: ${summary.totalAmount.toLocaleString()} FCFA
-        Poids total: ${summary.totalWeight} kg
-        Formulaire valide: ${summary.isFormValid ? 'OUI ✓' : 'NON ✗'}
-      `;
+    setTimeout(() => {
+      const delivery = {
+        type: deliveryType,
+        ...formData,
+        articles: articles,
+        total: calculateGrandTotal(),
+        trackingNumber: `TRK-${Date.now()}`,
+        createdAt: new Date().toISOString()
+      };
       
-      notify(message, 'info', {
-        duration: 8000,
-        title: 'Résumé de la Livraison'
-      });
-    }
+      console.log('Livraison créée:', delivery);
+      alert(`✅ ${deliveryType === 'course' ? 'Course' : 'Expédition'} créée avec succès!\nNuméro de suivi: ${delivery.trackingNumber}`);
+      
+      setFormData({ quartier: '', numeroDestinataire: '', coutLivraison: '' });
+      setArticles([{ id: Date.now(), nom: '', quantite: '', cout: '' }]);
+      setLoading(false);
+    }, 1000);
   };
 
   return (
-    <div className="space-y-6">
-      {/* En-tête avec bouton de test */}
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold text-gray-900">Créer une Livraison</h2>
-        {process.env.NODE_ENV === 'development' && (
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={testNotification}
-            type="button"
-          >
-            Tester Notification
-          </Button>
-        )}
-      </div>
-
-      {/* Alertes du formulaire */}
-      {error && <Alert type="error" message={error} onClose={() => {}} />}
-      {success && <Alert type="success" message={success} onClose={() => {}} />}
-
-      {/* Bouton de résumé rapide */}
-      <div className="flex justify-end">
-        <Button
-          variant="secondary"
-          size="sm"
-          onClick={showSummary}
-          type="button"
-          disabled={!clientInfo.name}
-        >
-          Aperçu
-        </Button>
-      </div>
-
-      <form onSubmit={handleSubmit}>
-        {/* Carte Type de Livraison */}
-        <Card title="Type de Livraison" className="mb-6">
-          <div className="flex gap-4">
-            <button
-              type="button"
-              onClick={() => setDeliveryType('local')}
-              className={`flex-1 flex flex-col items-center justify-center p-6 rounded-xl border-2 transition-all ${
-                deliveryType === 'local'
-                  ? 'border-blue-500 bg-blue-50 text-blue-700'
-                  : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
-              }`}
+    <div className="min-h-screen bg-gray-50 pb-20">
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+        <div className="space-y-4">
+          {/* Type de service */}
+          <div className="bg-white rounded-xl shadow-sm p-4">
+            <label className="block text-sm font-semibold text-gray-700 mb-2">
+              Type de service *
+            </label>
+            <select
+              value={deliveryType}
+              onChange={(e) => setDeliveryType(e.target.value)}
+              className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none text-base font-medium"
             >
-              <MdLocalShipping size={48} className="mb-3" />
-              <span className="text-lg font-semibold">Livraison Locale</span>
-              <span className="text-sm text-gray-600 mt-1">Dans la même ville</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setDeliveryType('transfer')}
-              className={`flex-1 flex flex-col items-center justify-center p-6 rounded-xl border-2 transition-all ${
-                deliveryType === 'transfer'
-                  ? 'border-green-500 bg-green-50 text-green-700'
-                  : 'border-gray-200 hover:border-green-300 hover:bg-gray-50'
-              }`}
-            >
-              <MdTransferWithinAStation size={48} className="mb-3" />
-              <span className="text-lg font-semibold">Transfert</span>
-              <span className="text-sm text-gray-600 mt-1">Vers une agence extérieure</span>
-            </button>
-          </div>
-          
-          {/* Indicateur visuel du type sélectionné */}
-          <div className="mt-4 flex items-center justify-center">
-            <div className={`px-4 py-2 rounded-full text-sm font-medium ${
-              deliveryType === 'local' 
-                ? 'bg-blue-100 text-blue-800' 
-                : 'bg-green-100 text-green-800'
-            }`}>
-              {deliveryType === 'local' ? 'Mode Livraison Locale' : 'Mode Transfert Inter-agence'}
-            </div>
-          </div>
-        </Card>
-
-        {/* Carte Informations du Client */}
-        <Card 
-          title="Informations du Client" 
-          className="mb-6"
-          action={
-            packages.length > 1 && clientInfo.name && (
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={copyClientToAllPackages}
-                type="button"
-                icon="copy"
-              >
-                Copier vers tous les colis
-              </Button>
-            )
-          }
-        >
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <Input
-              label="Nom complet *"
-              value={clientInfo.name}
-              onChange={(e) => handleClientInfoChange('name', e.target.value)}
-              placeholder="Jean Dupont"
-              required
-              className="focus:ring-2 focus:ring-blue-500"
-            />
-            <Input
-              label="Téléphone *"
-              type="tel"
-              value={clientInfo.phone}
-              onChange={(e) => handleClientInfoChange('phone', e.target.value)}
-              placeholder="+237 6XX XXX XXX"
-              required
-              helpText="Format: +237 699 999 999 ou 699999999"
-              className="focus:ring-2 focus:ring-blue-500"
-            />
-            <div className="md:col-span-2">
-              <Input
-                label="Adresse"
-                value={clientInfo.address}
-                onChange={(e) => handleClientInfoChange('address', e.target.value)}
-                placeholder="Adresse complète"
-                className="focus:ring-2 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-          
-          {/* Aperçu client */}
-          {clientInfo.name && (
-            <div className="mt-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
-              <p className="text-sm text-gray-600">
-                Client: <span className="font-medium text-gray-900">{clientInfo.name}</span>
-                {clientInfo.phone && (
-                  <> | Tél: <span className="font-medium text-gray-900">{formatDisplayPhone(clientInfo.phone)}</span></>
-                )}
-                {clientInfo.address && (
-                  <> | Adresse: <span className="font-medium text-gray-900">{clientInfo.address}</span></>
-                )}
+              <option value="course">🏃 Course</option>
+              <option value="expedition">📦 Expédition</option>
+            </select>
+            <div className="mt-2 px-3 py-2 bg-blue-50 rounded-lg">
+              <p className="text-xs text-blue-700">
+                {deliveryType === 'course' 
+                  ? '💨 Livraison rapide en ville' 
+                  : '🚚 Envoi vers une destination'}
               </p>
             </div>
-          )}
-        </Card>
+          </div>
 
-        {/* Carte Colis */}
-        <Card 
-          title={`Colis (${packages.length})`} 
-          action={
-            <div className="flex gap-2">
-              <Button 
-                variant="secondary" 
-                icon="plus"
-                onClick={addPackage}
-                type="button"
-                size="sm"
-              >
-                Ajouter un colis
-              </Button>
-              {packages.length > 0 && (
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => notify(`Poids total: ${calculateTotalWeight()} kg`, 'info', { duration: 3000 })}
-                  type="button"
-                >
-                  Voir poids total
-                </Button>
-              )}
+          {/* Informations de base */}
+          <div className="bg-white rounded-xl shadow-sm p-4">
+            <h2 className="text-base font-bold text-gray-800 mb-3">📍 Informations</h2>
+            
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
+                  Quartier *
+                </label>
+                <input
+                  type="text"
+                  value={formData.quartier}
+                  onChange={(e) => setFormData({...formData, quartier: e.target.value})}
+                  placeholder="Ex: Bonapriso, Bonamoussadi..."
+                  className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
+                  Numéro du destinataire *
+                </label>
+                <input
+                  type="tel"
+                  value={formData.numeroDestinataire}
+                  onChange={(e) => setFormData({...formData, numeroDestinataire: e.target.value})}
+                  placeholder="+237 6XX XXX XXX"
+                  className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-1">
+                  Coût de livraison (FCFA) *
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="100"
+                  value={formData.coutLivraison}
+                  onChange={(e) => setFormData({...formData, coutLivraison: e.target.value})}
+                  placeholder="1000"
+                  className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
+                />
+              </div>
             </div>
-          }
-          className="mb-6"
-        >
-          <div className="space-y-6">
-            {packages.map((pkg, index) => (
-              <div key={pkg.id} className="border border-gray-200 rounded-lg p-4 space-y-4 bg-white">
-                <div className="flex justify-between items-center">
-                  <div className="flex items-center space-x-3">
-                    <h4 className="font-medium text-gray-900">Colis #{index + 1}</h4>
-                    {pkg.amount && (
-                      <span className="px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">
-                        {parseFloat(pkg.amount).toLocaleString()} FCFA
-                      </span>
-                    )}
-                  </div>
-                  <div className="flex items-center space-x-2">
-                    {packages.length > 1 && duplicatePackage && (
-                      <Button
-                        variant="secondary"
-                        icon="copy"
-                        onClick={() => duplicatePackage(pkg.id)}
-                        type="button"
-                        size="sm"
-                        title="Dupliquer ce colis"
-                      >
-                        Dupliquer
-                      </Button>
-                    )}
-                    {packages.length > 1 && (
-                      <Button
-                        variant="danger"
-                        icon="trash"
-                        onClick={() => {
-                          if (window.confirm(`Supprimer le colis #${index + 1} ?`)) {
-                            removePackage(pkg.id);
-                            notify(`Colis #${index + 1} supprimé`, 'info', { duration: 3000 });
-                          }
-                        }}
-                        type="button"
-                        size="sm"
-                        title="Supprimer ce colis"
-                      >
-                        Supprimer
-                      </Button>
-                    )}
-                  </div>
-                </div>
+          </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <Input
-                    label="Destinataire *"
-                    value={pkg.recipient}
-                    onChange={(e) => updatePackage(pkg.id, 'recipient', e.target.value)}
-                    placeholder="Nom du destinataire"
-                    required
-                    className="focus:ring-2 focus:ring-blue-500"
-                  />
-                  <Input
-                    label="Téléphone du destinataire *"
-                    type="tel"
-                    value={pkg.recipientPhone}
-                    onChange={(e) => updatePackage(pkg.id, 'recipientPhone', e.target.value)}
-                    placeholder="+237 6XX XXX XXX"
-                    required
-                    className="focus:ring-2 focus:ring-blue-500"
-                  />
-                  <Input
-                    label="Destination *"
-                    value={pkg.destination}
-                    onChange={(e) => updatePackage(pkg.id, 'destination', e.target.value)}
-                    placeholder="Adresse de livraison"
-                    required
-                    className="focus:ring-2 focus:ring-blue-500"
-                  />
-                  
-                  {deliveryType === 'transfer' ? (
-                    <Input
-                      label="Nom de l'agence *"
-                      value={pkg.agencyName}
-                      onChange={(e) => updatePackage(pkg.id, 'agencyName', e.target.value)}
-                      placeholder="Express Voyages Yaoundé"
-                      required
-                      className="focus:ring-2 focus:ring-green-500"
-                    />
-                  ) : (
-                    <div className="space-y-2">
-                      <label className="flex items-center space-x-2">
-                        <input
-                          type="checkbox"
-                          checked={pkg.isOutOfTown}
-                          onChange={(e) => updatePackage(pkg.id, 'isOutOfTown', e.target.checked)}
-                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        <span className="text-sm font-medium text-gray-700">Hors ville</span>
+          {/* Articles */}
+          <div className="bg-white rounded-xl shadow-sm p-4">
+            <div className="flex justify-between items-center mb-3">
+              <h2 className="text-base font-bold text-gray-800">🛍️ Articles ({articles.length})</h2>
+              <button
+                type="button"
+                onClick={addArticle}
+                className="flex items-center gap-1 px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium"
+              >
+                <FiPlus size={16} />
+                Ajouter
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {articles.map((article, index) => (
+                <div key={article.id} className="border-2 border-gray-200 rounded-xl p-3 hover:border-blue-300 transition-colors">
+                  <div className="flex justify-between items-center mb-3">
+                    <span className="font-semibold text-gray-700 text-sm">Article #{index + 1}</span>
+                    {articles.length > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => removeArticle(article.id)}
+                        className="text-red-600 hover:text-red-700 p-1.5 rounded-lg hover:bg-red-50 transition-colors"
+                      >
+                        <FiTrash2 size={16} />
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1">
+                        Nom *
                       </label>
-                      {pkg.isOutOfTown && (
-                        <Input
-                          value={pkg.agencyName}
-                          onChange={(e) => updatePackage(pkg.id, 'agencyName', e.target.value)}
-                          placeholder="Nom de l'agence partenaire"
-                          className="focus:ring-2 focus:ring-blue-500"
+                      <input
+                        type="text"
+                        value={article.nom}
+                        onChange={(e) => updateArticle(article.id, 'nom', e.target.value)}
+                        placeholder="Ex: Pizza, Document..."
+                        className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-sm"
+                      />
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">
+                          Quantité *
+                        </label>
+                        <input
+                          type="number"
+                          min="1"
+                          value={article.quantite}
+                          onChange={(e) => updateArticle(article.id, 'quantite', e.target.value)}
+                          placeholder="1"
+                          className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-sm"
                         />
-                      )}
+                      </div>
+
+                      <div>
+                        <label className="block text-xs font-medium text-gray-600 mb-1">
+                          Prix (FCFA) *
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="50"
+                          value={article.cout}
+                          onChange={(e) => updateArticle(article.id, 'cout', e.target.value)}
+                          placeholder="2000"
+                          className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {article.nom && article.quantite && article.cout && (
+                    <div className="mt-2 text-xs text-gray-600 bg-gray-50 px-3 py-2 rounded-lg">
+                      Sous-total: <span className="font-bold text-blue-700">
+                        {(parseFloat(article.quantite) * parseFloat(article.cout)).toLocaleString()} FCFA
+                      </span>
                     </div>
                   )}
-                  
-                  <Input
-                    label="Montant (FCFA) *"
-                    type="number"
-                    min="0"
-                    step="50"
-                    value={pkg.amount}
-                    onChange={(e) => updatePackage(pkg.id, 'amount', e.target.value)}
-                    placeholder="5000"
-                    required
-                    className="focus:ring-2 focus:ring-blue-500"
-                  />
-                  <Input
-                    label="Poids (kg)"
-                    type="number"
-                    min="0"
-                    step="0.1"
-                    value={pkg.weight}
-                    onChange={(e) => updatePackage(pkg.id, 'weight', e.target.value)}
-                    placeholder="2.5"
-                    className="focus:ring-2 focus:ring-blue-500"
-                  />
                 </div>
-                <TextArea
-                  label="Description"
-                  value={pkg.description}
-                  onChange={(e) => updatePackage(pkg.id, 'description', e.target.value)}
-                  placeholder="Description du colis (facultatif)"
-                  rows={2}
-                  className="focus:ring-2 focus:ring-blue-500"
-                />
-                
-                {/* Aperçu rapide du colis */}
-                {(pkg.recipient || pkg.destination) && (
-                  <div className="pt-3 border-t border-gray-100">
-                    <p className="text-xs text-gray-500">
-                      Aperçu: 
-                      {pkg.recipient && ` ${pkg.recipient}`}
-                      {pkg.destination && ` → ${pkg.destination}`}
-                      {pkg.amount && ` (${parseFloat(pkg.amount).toLocaleString()} FCFA)`}
-                    </p>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
 
-          {/* Résumé des colis */}
-          <div className="mt-6 p-4 bg-blue-50 rounded-lg border border-blue-200">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="text-center">
-                <p className="text-sm font-medium text-blue-700">Nombre de colis</p>
-                <p className="text-2xl font-bold text-blue-900">{packages.length}</p>
-              </div>
-              <div className="text-center">
-                <p className="text-sm font-medium text-blue-700">Montant total</p>
-                <p className="text-2xl font-bold text-blue-900">
-                  {calculateTotal().toLocaleString()} FCFA
-                </p>
-              </div>
-              <div className="text-center">
-                <p className="text-sm font-medium text-blue-700">Poids total</p>
-                <p className="text-2xl font-bold text-blue-900">
-                  {calculateTotalWeight()} kg
-                </p>
-              </div>
-            </div>
-            
-            {/* Indicateur de validation */}
-            <div className="mt-4 flex justify-center">
-              <div className={`px-4 py-2 rounded-full text-sm font-medium ${
-                isFormValid?.() 
-                  ? 'bg-green-100 text-green-800 border border-green-200' 
-                  : 'bg-yellow-100 text-yellow-800 border border-yellow-200'
-              }`}>
-                {isFormValid?.() ? '✓ Formulaire valide' : '⚠️ Formulaire incomplet'}
-              </div>
-            </div>
-          </div>
-        </Card>
-
-        {/* Carte Informations supplémentaires */}
-        <Card title="Informations supplémentaires" className="mb-6">
-          <TextArea
-            label="Notes"
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Instructions spéciales, informations importantes..."
-            rows={4}
-            helpText="Ces notes seront visibles par tous les administrateurs et livreurs"
-            className="focus:ring-2 focus:ring-blue-500"
-          />
-          
-          {notes && (
-            <div className="mt-3 p-3 bg-gray-50 rounded border border-gray-200">
-              <p className="text-sm text-gray-600">
-                <span className="font-medium">Aperçu des notes:</span> {notes.length > 100 ? `${notes.substring(0, 100)}...` : notes}
-              </p>
-            </div>
-          )}
-        </Card>
-
-        {/* Actions du formulaire */}
-        <div className="sticky bottom-0 bg-white p-4 border-t border-gray-200 -mx-6 -mb-6 rounded-b-lg shadow-lg">
-          <div className="flex flex-col sm:flex-row gap-4 justify-between items-center">
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="secondary"
-                type="button"
-                onClick={() => {
-                  if (window.confirm('Voulez-vous vraiment réinitialiser le formulaire ? Toutes les données seront perdues.')) {
-                    resetForm();
-                    notify('Formulaire réinitialisé', 'info', { duration: 3000 });
-                  }
-                }}
-                disabled={loading}
-              >
-                Réinitialiser
-              </Button>
-              
-              <Button
-                variant="secondary"
-                type="button"
-                onClick={() => {
-                  const summary = getFormSummary?.();
-                  if (summary) {
-                    const text = `
-                      📦 Résumé Livraison:
-                      Type: ${summary.deliveryType}
-                      Client: ${summary.client}
-                      Colis: ${summary.packagesCount}
-                      Total: ${summary.totalAmount.toLocaleString()} FCFA
-                      Statut: ${summary.isFormValid ? 'PRÊT' : 'INCOMPLET'}
-                    `;
-                    navigator.clipboard.writeText(text);
-                    notify('Résumé copié dans le presse-papier', 'success', { duration: 3000 });
-                  }
-                }}
-                disabled={loading || !clientInfo.name}
-                icon="copy"
-              >
-                Copier résumé
-              </Button>
-            </div>
-            
-            <div className="flex flex-col sm:flex-row items-center gap-4">
-              {packages.length > 0 && (
-                <div className="text-sm text-gray-600 text-center sm:text-right">
-                  <p className="font-medium">
-                    Total: <span className="text-lg font-bold text-blue-700">
-                      {calculateTotal().toLocaleString()} FCFA
-                    </span>
-                  </p>
-                  <p className="text-xs">
-                    {packages.length} colis • {calculateTotalWeight()} kg
-                  </p>
-                </div>
-              )}
-              
-              <Button
-                variant="primary"
-                type="submit"
-                disabled={loading || !isFormValid?.()}
-                icon="check"
-                size="lg"
-                className="min-w-[180px]"
-              >
-                {loading ? (
-                  <span className="flex items-center">
-                    <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
-                    Création en cours...
+            {/* Récapitulatif */}
+            <div className="mt-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 border-2 border-blue-200">
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Total articles:</span>
+                  <span className="font-semibold text-gray-900">
+                    {calculateArticlesTotal().toLocaleString()} FCFA
                   </span>
-                ) : (
-                  <>
-                    <FiCheck className="mr-2" size={20} />
-                    {deliveryType === 'transfer' ? 'Créer le Transfert' : 'Créer la Livraison'}
-                  </>
-                )}
-              </Button>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Livraison:</span>
+                  <span className="font-semibold text-gray-900">
+                    {(parseFloat(formData.coutLivraison) || 0).toLocaleString()} FCFA
+                  </span>
+                </div>
+                <div className="pt-2 border-t-2 border-blue-300 flex justify-between items-center">
+                  <span className="font-bold text-gray-800">TOTAL:</span>
+                  <span className="font-bold text-xl text-blue-700">
+                    {calculateGrandTotal().toLocaleString()} FCFA
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
-          
-          {/* Indicateur de statut */}
-          <div className="mt-4 text-center">
-            <div className="inline-flex items-center px-4 py-2 rounded-full bg-gray-100">
-              <div className={`h-2 w-2 rounded-full mr-2 ${
-                loading ? 'bg-yellow-500 animate-pulse' :
-                isFormValid?.() ? 'bg-green-500' : 'bg-red-500'
-              }`} />
-              <span className="text-sm text-gray-600">
-                {loading ? 'Soumission en cours...' :
-                 isFormValid?.() ? 'Prêt à être envoyé' :
-                 'Complétez tous les champs obligatoires (*)'}
-              </span>
+
+          {/* Aide */}
+          <div className="bg-blue-50 rounded-xl p-3 border border-blue-200">
+            <p className="text-xs text-blue-800">
+              <span className="font-bold">💡 Astuce:</span> Tous les champs marqués (*) sont obligatoires. Le total est calculé automatiquement.
+            </p>
+          </div>
+        </div>
+
+        {/* Bouton fixe en bas */}
+        <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 p-4 shadow-lg z-10">
+          <div className="max-w-3xl mx-auto">
+            <button
+              onClick={handleSubmit}
+              disabled={loading || !isFormValid()}
+              className={`w-full py-4 rounded-xl font-bold text-base transition-all flex items-center justify-center gap-2 ${
+                loading || !isFormValid()
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 shadow-lg active:scale-[0.98]'
+              }`}
+            >
+              {loading ? (
+                <>
+                  <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
+                  Création en cours...
+                </>
+              ) : (
+                <>
+                  <FiCheck size={20} />
+                  Créer la {deliveryType === 'course' ? 'course' : 'expédition'}
+                </>
+              )}
+            </button>
+
+            <div className="mt-2 text-center">
+              <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs ${
+                isFormValid() 
+                  ? 'bg-green-100 text-green-700' 
+                  : 'bg-yellow-100 text-yellow-700'
+              }`}>
+                <div className={`h-2 w-2 rounded-full ${
+                  isFormValid() ? 'bg-green-500' : 'bg-yellow-500'
+                } animate-pulse`}></div>
+                {isFormValid() ? 'Prêt à envoyer' : 'Complétez tous les champs (*)'}
+              </div>
             </div>
           </div>
         </div>
-      </form>
-
-      {/* Instructions d'aide */}
-      <div className="mt-8 p-4 bg-blue-50 rounded-lg border border-blue-200">
-        <h3 className="font-medium text-blue-900 mb-2">💡 Comment utiliser ce formulaire :</h3>
-        <ul className="text-sm text-blue-700 space-y-1 list-disc list-inside">
-          <li>Tous les champs marqués d'un * sont obligatoires</li>
-          <li>Pour les transferts, le nom de l'agence est requis</li>
-          <li>Cliquez sur "Dupliquer" pour créer un colis similaire</li>
-          <li>Une notification sera envoyée à tous les administrateurs après création</li>
-          <li>Le numéro de suivi sera généré automatiquement</li>
-        </ul>
       </div>
     </div>
   );
-};
-
-export default CreateDeliveryPage;
+}
