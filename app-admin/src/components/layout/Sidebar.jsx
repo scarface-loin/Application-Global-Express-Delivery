@@ -1,17 +1,14 @@
-// src/components/layout/Sidebar.jsx - modifications
 import React from 'react';
 import {
   FiHome,
   FiPackage,
-  FiUsers,
   FiUser,
   FiLogOut,
   FiTruck,
   FiPlus,
-  FiSearch,
-  FiDollarSign,
-  FiAlertTriangle,
-  FiCheckCircle // <--- AJOUTER ICI
+  FiCheckCircle,
+  FiClock,      // <--- Pour Historique
+  FiFileText    // <--- Pour Récapitulatif
 } from 'react-icons/fi';
 import { useAuth } from '../../context/AuthContext';
 
@@ -20,15 +17,16 @@ export const Sidebar = ({ isOpen, onClose, currentPage, setCurrentPage }) => {
 
   const menuItems = [
     { id: 'dashboard', label: 'Tableau de bord', icon: <FiHome /> },
-    { id: 'deliveries', label: 'course du jours', icon: <FiPackage /> },
-    { id: 'validation', label: 'Validation', icon: <FiCheckCircle /> }, // <--- NOUVEAU
+    { id: 'deliveries', label: 'Course du jour', icon: <FiPackage /> },
+    { id: 'validation', label: 'Validation', icon: <FiCheckCircle /> },
+    { id: 'daily-summary', label: 'Récapitulatif jour', icon: <FiFileText /> }, // <--- NOUVEAU
+    { id: 'history', label: 'Historique', icon: <FiClock /> },            // <--- NOUVEAU
     { id: 'create-delivery', label: 'Créer Livraison', icon: <FiPlus /> },
     { id: 'profile', label: 'Mon Profil', icon: <FiUser /> },
   ];
 
   return (
     <>
-      {/* Overlay mobile */}
       {isOpen && (
         <div
           className="fixed inset-0 bg-black bg-opacity-50 z-40 lg:hidden"
@@ -36,7 +34,6 @@ export const Sidebar = ({ isOpen, onClose, currentPage, setCurrentPage }) => {
         ></div>
       )}
 
-      {/* Sidebar */}
       <aside
         className={`fixed top-0 left-0 h-full bg-gray-900 text-white w-64 z-50 transform transition-transform duration-300 ${isOpen ? 'translate-x-0' : '-translate-x-full'
           } lg:translate-x-0`}

@@ -24,10 +24,8 @@ export const Sidebar = ({ isOpen, onClose, currentPage, setCurrentPage }) => {
     { id: 'deliveries', label: 'Course du jour', icon: <FiPackage /> },
     { id: 'validation', label: 'Validation', icon: <FiCheckCircle /> },
     { id: 'deliverymen', label: 'Livreurs', icon: <FiUsers /> }, // <--- AJOUTÉ
-    { id: 'debts', label: 'Dettes', icon: <FiAlertTriangle /> }, // <--- AJOUTÉ
-    { id: 'settlements', label: 'Caisse & Versements', icon: <FiDollarSign /> },
+    { id: 'settlements', label: 'Salaire', icon: <FiDollarSign /> },
     { id: 'create-delivery', label: 'Créer Livraison', icon: <FiPlus /> },
-    { id: 'tracking', label: 'Suivi Colis', icon: <FiSearch /> }, // <--- AJOUTÉ
     { id: 'profile', label: 'Mon Profil', icon: <FiUser /> },
   ];
 
