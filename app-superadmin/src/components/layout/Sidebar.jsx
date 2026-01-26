@@ -1,28 +1,33 @@
-// src/components/layout/Sidebar.jsx - modifications
+// src/components/layout/Sidebar.jsx
 import React from 'react';
 import {
   FiHome,
   FiPackage,
-  FiUsers,
+  FiUsers,     // Pour les livreurs
   FiUser,
   FiLogOut,
   FiTruck,
   FiPlus,
-  FiSearch,
+  FiSearch,    // Pour le suivi
   FiDollarSign,
-  FiAlertTriangle,
-  FiCheckCircle // <--- AJOUTER ICI
+  FiAlertTriangle, // Pour les dettes
+  FiCheckCircle
 } from 'react-icons/fi';
 import { useAuth } from '../../context/AuthContext';
 
 export const Sidebar = ({ isOpen, onClose, currentPage, setCurrentPage }) => {
   const { logout } = useAuth();
 
+  // J'ai ajouté les pages manquantes ici
   const menuItems = [
     { id: 'dashboard', label: 'Tableau de bord', icon: <FiHome /> },
-    { id: 'deliveries', label: 'course du jours', icon: <FiPackage /> },
-    { id: 'validation', label: 'Validation', icon: <FiCheckCircle /> }, // <--- NOUVEAU
+    { id: 'deliveries', label: 'Course du jour', icon: <FiPackage /> },
+    { id: 'validation', label: 'Validation', icon: <FiCheckCircle /> },
+    { id: 'deliverymen', label: 'Livreurs', icon: <FiUsers /> }, // <--- AJOUTÉ
+    { id: 'debts', label: 'Dettes', icon: <FiAlertTriangle /> }, // <--- AJOUTÉ
+    { id: 'settlements', label: 'Caisse & Versements', icon: <FiDollarSign /> },
     { id: 'create-delivery', label: 'Créer Livraison', icon: <FiPlus /> },
+    { id: 'tracking', label: 'Suivi Colis', icon: <FiSearch /> }, // <--- AJOUTÉ
     { id: 'profile', label: 'Mon Profil', icon: <FiUser /> },
   ];
 
@@ -48,7 +53,8 @@ export const Sidebar = ({ isOpen, onClose, currentPage, setCurrentPage }) => {
           </h1>
         </div>
 
-        <nav className="p-4 space-y-2">
+        <nav className="p-4 space-y-2 overflow-y-auto max-h-[calc(100vh-140px)]"> 
+          {/* Ajout de overflow-y-auto si le menu devient trop long */}
           {menuItems.map((item) => (
             <button
               key={item.id}
@@ -67,7 +73,7 @@ export const Sidebar = ({ isOpen, onClose, currentPage, setCurrentPage }) => {
           ))}
         </nav>
 
-        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-800">
+        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-800 bg-gray-900">
           <button
             onClick={logout}
             className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-gray-300 hover:bg-red-600 hover:text-white transition-colors"

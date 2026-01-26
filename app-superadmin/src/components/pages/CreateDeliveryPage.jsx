@@ -13,7 +13,6 @@ export default function CreateDeliveryPage() {
     nomClient: '',
     contactClient: '',
     villeDestination: '',
-    coutExpedition: '1000',
   });
   const [articles, setArticles] = useState([
     { id: 1, nom: '', quantite: '', cout: '' }
@@ -61,10 +60,8 @@ export default function CreateDeliveryPage() {
     if (deliveryType === 'course') {
       const livraisonCout = parseFloat(formData.coutLivraison) || 0;
       return articlesTotal + livraisonCout;
-    } else {
-      const expeditionCout = parseFloat(formData.coutExpedition) || 0;
-      return articlesTotal + expeditionCout;
     }
+    return articlesTotal;
   };
 
   const isFormValid = () => {
@@ -107,7 +104,6 @@ export default function CreateDeliveryPage() {
         delivery.nomClient = formData.nomClient;
         delivery.contactClient = formData.contactClient;
         delivery.villeDestination = formData.villeDestination;
-        delivery.coutExpedition = formData.coutExpedition;
       }
       
       console.log('Livraison créée:', delivery);
@@ -121,7 +117,6 @@ export default function CreateDeliveryPage() {
         nomClient: '',
         contactClient: '',
         villeDestination: '',
-        coutExpedition: '1000',
       });
       setArticles([{ id: Date.now(), nom: '', quantite: '', cout: '' }]);
       setLoading(false);
@@ -264,21 +259,6 @@ export default function CreateDeliveryPage() {
                       className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
                     />
                   </div>
-
-                  <div>
-                    <label className="block text-sm font-semibold text-gray-700 mb-1">
-                      Coût d'expédition (FCFA) *
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="100"
-                      value={formData.coutExpedition}
-                      onChange={(e) => setFormData({...formData, coutExpedition: e.target.value})}
-                      placeholder="1000"
-                      className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
-                    />
-                  </div>
                 </>
               )}
             </div>
@@ -380,18 +360,11 @@ export default function CreateDeliveryPage() {
                     {calculateArticlesTotal().toLocaleString()} FCFA
                   </span>
                 </div>
-                {deliveryType === 'course' ? (
+                {deliveryType === 'course' && (
                   <div className="flex justify-between">
                     <span className="text-gray-700">Livraison:</span>
                     <span className="font-semibold text-gray-900">
                       {(parseFloat(formData.coutLivraison) || 0).toLocaleString()} FCFA
-                    </span>
-                  </div>
-                ) : (
-                  <div className="flex justify-between">
-                    <span className="text-gray-700">Expédition:</span>
-                    <span className="font-semibold text-gray-900">
-                      {(parseFloat(formData.coutExpedition) || 0).toLocaleString()} FCFA
                     </span>
                   </div>
                 )}
@@ -409,7 +382,7 @@ export default function CreateDeliveryPage() {
           <div className="bg-blue-50 rounded-xl p-3 border border-blue-200">
             <p className="text-xs text-blue-800">
               <span className="font-bold">💡 Astuce:</span> Tous les champs marqués (*) sont obligatoires. 
-              Le total inclut les frais de {deliveryType === 'course' ? 'livraison' : 'expédition'}.
+              {deliveryType === 'course' && ' Le total inclut les frais de livraison.'}
             </p>
           </div>
         </div>

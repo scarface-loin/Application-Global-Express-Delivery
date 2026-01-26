@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { FiEdit, FiLock, FiUser, FiPhone, FiShield } from 'react-icons/fi';
+import { FiEdit, FiLock, FiUser, FiPhone, FiShield, FiPlus, FiUsers, FiPackage, FiSearch } from 'react-icons/fi';
 import Card from '../common/Card';
 import Button from '../common/Button';
 import Modal from '../common/Modal';
 import Input from '../common/Input';
 import Alert from '../common/Alert';
 import LoadingSpinner from '../common/LoadingSpinner';
-import { apiRequest } from '../../services/api';
+// import { apiRequest } from '../../services/api'; // Backend désactivé
 import { useAuth } from '../../context/AuthContext';
 
 // Sous-composant: Formulaire d'édition du profil
@@ -18,11 +18,19 @@ const ProfileEditForm = ({ profile, onClose, onSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
     setLoading(true);
     setError('');
 
+    // --- BYPASS BACKEND ---
+    setTimeout(() => {
+      // Simulation de succès
+      onSuccess();
+      setLoading(false);
+    }, 1000);
+
+    /* CODE BACKEND ORIGINAL
     try {
       await apiRequest('/admin/profile', {
         method: 'PATCH',
@@ -34,6 +42,7 @@ const ProfileEditForm = ({ profile, onClose, onSuccess }) => {
     } finally {
       setLoading(false);
     }
+    */
   };
 
   return (
@@ -81,7 +90,7 @@ const ProfileEditForm = ({ profile, onClose, onSuccess }) => {
             Annuler
           </Button>
           <Button variant="primary" type="submit" disabled={loading}>
-            {loading ? 'Enregistrement...' : 'Enregistrer'}
+            {loading ? 'Enregistrement...' : 'Enregistrer (Test)'}
           </Button>
         </div>
       </form>
@@ -99,7 +108,7 @@ const PasswordChangeForm = ({ onClose, onSuccess }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault();
     
     if (passwords.newPassword !== passwords.confirmPassword) {
@@ -115,6 +124,14 @@ const PasswordChangeForm = ({ onClose, onSuccess }) => {
     setLoading(true);
     setError('');
 
+    // --- BYPASS BACKEND ---
+    setTimeout(() => {
+      alert('Mot de passe modifié avec succès (Mode Simulation)');
+      onSuccess();
+      setLoading(false);
+    }, 1000);
+
+    /* CODE BACKEND ORIGINAL
     try {
       await apiRequest('/admin/profile/password', {
         method: 'PATCH',
@@ -130,6 +147,7 @@ const PasswordChangeForm = ({ onClose, onSuccess }) => {
     } finally {
       setLoading(false);
     }
+    */
   };
 
   return (
@@ -230,6 +248,11 @@ const SecurityCard = () => {
   const handleLogoutAllDevices = async () => {
     if (!confirm('Êtes-vous sûr de vouloir vous déconnecter de tous les appareils ?')) return;
 
+    // --- BYPASS BACKEND ---
+    alert('Déconnexion de tous les appareils effectuée (Simulation)');
+    logout();
+
+    /* CODE BACKEND ORIGINAL
     try {
       await apiRequest('/admin/profile/logout-all', {
         method: 'POST',
@@ -239,6 +262,7 @@ const SecurityCard = () => {
     } catch (error) {
       alert('Erreur lors de la déconnexion globale');
     }
+    */
   };
 
   return (
@@ -332,6 +356,31 @@ const ProfilePage = () => {
 
   const fetchProfileData = async () => {
     setLoading(true);
+    
+    // --- BYPASS BACKEND ---
+    setTimeout(() => {
+        const mockProfile = {
+            _id: "admin-12345",
+            name: "Steve (Admin Test)",
+            phone: "+237699000000",
+            createdAt: "2023-01-15T10:00:00Z",
+            lastLogin: new Date().toISOString()
+        };
+        
+        setProfile(mockProfile);
+        setAdmin(mockProfile);
+    
+        // Récupérer les statistiques (simulation)
+        setStats({
+            totalDeliveries: 156,
+            activeDeliveryMen: 8,
+            pendingDeliveries: 12,
+            totalRevenue: 1250000,
+        });
+        setLoading(false);
+    }, 500);
+
+    /* CODE BACKEND ORIGINAL
     try {
       // Récupérer les informations du profil
       const profileResponse = await apiRequest('/admin/profile');
@@ -350,6 +399,7 @@ const ProfilePage = () => {
     } finally {
       setLoading(false);
     }
+    */
   };
 
   const formatPhoneNumber = (phone) => {
@@ -386,7 +436,7 @@ const ProfilePage = () => {
                 <div className="flex-1">
                   <h3 className="text-xl font-semibold text-gray-900">{profile?.name || 'Administrateur'}</h3>
                   <p className="text-gray-600">{formatPhoneNumber(profile?.phone)}</p>
-                  <p className="text-gray-600">Administrateur système</p>
+                  <p className="text-gray-600">Administrateur système (Mode Test)</p>
                   
                   <div className="flex gap-2 mt-4">
                     <Button
