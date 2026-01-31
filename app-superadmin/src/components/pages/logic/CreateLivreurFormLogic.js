@@ -45,7 +45,7 @@ export const createLivreurInFirebase = async (formData) => {
     // 4. Hasher le mot de passe par défaut "123456"
     // Note: Idéalement, fais ça côté backend. Ici c'est une simulation simple.
     // Pour une vraie sécu, utilise une librairie comme bcryptjs ou Firebase Auth.
-    const defaultPasswordHash = "hash_insecable_de_123456"; 
+    const defaultPasswordHash = "$2a$12$OgVFDae7w11cDMP3Og9ZhO949csJkJy9PHDSwtQx.pRzClvxmX/YC"; 
 
     // 5. Construire l'objet Livreur (Structure V2 avec Dette et Sécurité)
     const newLivreur = {

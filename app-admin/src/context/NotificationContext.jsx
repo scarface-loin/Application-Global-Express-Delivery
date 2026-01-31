@@ -1,12 +1,11 @@
 import React, { createContext, useContext, useState, useCallback } from 'react';
-import ToastNotification from '../components/common/ToastNotification';
 
 const NotificationContext = createContext();
 
 export const useNotification = () => {
   const context = useContext(NotificationContext);
   if (!context) {
-    throw new Error('useNotification must be used within NotificationProvider');
+    throw new Error('useNotification doit être utilisé dans un NotificationProvider');
   }
   return context;
 };
@@ -14,122 +13,75 @@ export const useNotification = () => {
 export const NotificationProvider = ({ children }) => {
   const [notifications, setNotifications] = useState([]);
 
-  const addNotification = useCallback(({ 
-    message, 
-    type = 'success', 
-    duration = 5000,
-    title 
-  }) => {
-    const id = Date.now() + Math.random();
+  // Ajouter une notification
+  const addNotification = useCallback((notification) => {
+    const id = Date.now().toString();
     const newNotification = {
       id,
-      message,
-      type,
-      duration,
-      title
+      message: notification.message || '',
+      type: notification.type || 'info', // 'success', 'error', 'warning', 'info'
+      duration: notification.duration || 5000,
+      timestamp: new Date().toISOString()
     };
 
     setNotifications(prev => [...prev, newNotification]);
 
-    // Auto-remove after duration
-    setTimeout(() => {
-      removeNotification(id);
-    }, duration);
+    // Auto-suppression après la durée spécifiée
+    if (newNotification.duration > 0) {
+      setTimeout(() => {
+        removeNotification(id);
+      }, newNotification.duration);
+    }
 
     return id;
   }, []);
 
+  // Supprimer une notification
   const removeNotification = useCallback((id) => {
-    setNotifications(prev => prev.filter(notification => notification.id !== id));
+    setNotifications(prev => prev.filter(notif => notif.id !== id));
   }, []);
 
-  const notifySuccess = useCallback((message, options = {}) => {
-    return addNotification({
-      message,
-      type: 'success',
-      title: 'Succès',
-      ...options
-    });
+  // Notification de succès
+  const success = useCallback((message, duration) => {
+    return addNotification({ message, type: 'success', duration });
   }, [addNotification]);
 
-  const notifyError = useCallback((message, options = {}) => {
-    return addNotification({
-      message,
-      type: 'error',
-      title: 'Erreur',
-      ...options
-    });
+  // Notification d'erreur
+  const error = useCallback((message, duration) => {
+    return addNotification({ message, type: 'error', duration });
   }, [addNotification]);
 
-  const notifyInfo = useCallback((message, options = {}) => {
-    return addNotification({
-      message,
-      type: 'info',
-      title: 'Information',
-      ...options
-    });
+  // Notification d'avertissement
+  const warning = useCallback((message, duration) => {
+    return addNotification({ message, type: 'warning', duration });
   }, [addNotification]);
 
-  const notifyWarning = useCallback((message, options = {}) => {
-    return addNotification({
-      message,
-      type: 'warning',
-      title: 'Attention',
-      ...options
-    });
+  // Notification d'information
+  const info = useCallback((message, duration) => {
+    return addNotification({ message, type: 'info', duration });
   }, [addNotification]);
 
-  // Notification pour les livraisons/transferts
-  const notifyDeliverySuccess = useCallback((deliveryType, trackingNumber, options = {}) => {
-    const typeText = deliveryType === 'transfer' ? 'Transfert' : 'Livraison';
-    const message = `${typeText} créée avec succès!\nNuméro de suivi: ${trackingNumber}`;
-    
-    // Notifier tous les administrateurs (simuler un envoi via WebSocket)
-    // Dans une vraie application, vous enverriez ceci via WebSocket
-    simulateAdminNotification(`${typeText} créée - ${trackingNumber}`);
-    
-    return addNotification({
-      message,
-      type: 'success',
-      title: `${typeText} Réussie`,
-      duration: 8000,
-      ...options
-    });
-  }, [addNotification]);
+  // Supprimer toutes les notifications
+  const clearAll = useCallback(() => {
+    setNotifications([]);
+  }, []);
 
   const value = {
     notifications,
     addNotification,
     removeNotification,
-    notifySuccess,
-    notifyError,
-    notifyInfo,
-    notifyWarning,
-    notifyDeliverySuccess
+    success,
+    error,
+    warning,
+    info,
+    clearAll
   };
 
   return (
     <NotificationContext.Provider value={value}>
       {children}
-      <div className="fixed top-4 right-4 z-50 space-y-2">
-        {notifications.map(notification => (
-          <ToastNotification
-            key={notification.id}
-            message={notification.message}
-            type={notification.type}
-            duration={notification.duration}
-            title={notification.title}
-            onClose={() => removeNotification(notification.id)}
-          />
-        ))}
-      </div>
     </NotificationContext.Provider>
   );
 };
 
-// Simuler une notification pour tous les admins (à remplacer par WebSocket)
-const simulateAdminNotification = (message) => {
-  console.log(`[NOTIFICATION ADMIN] ${message}`);
-  // Ici, vous intégreriez votre système WebSocket
-  // Exemple: socket.emit('admin-notification', { message, type: 'delivery_created' });
-};
+export default NotificationContext;

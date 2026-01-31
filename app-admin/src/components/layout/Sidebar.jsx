@@ -19,7 +19,6 @@ export const Sidebar = ({ isOpen, onClose, currentPage, setCurrentPage }) => {
     { id: 'dashboard', label: 'Tableau de bord', icon: <FiHome /> },
     { id: 'deliveries', label: 'Course du jour', icon: <FiPackage /> },
     { id: 'validation', label: 'Validation', icon: <FiCheckCircle /> },
-    { id: 'daily-summary', label: 'Récapitulatif jour', icon: <FiFileText /> }, // <--- NOUVEAU
     { id: 'history', label: 'Historique', icon: <FiClock /> },            // <--- NOUVEAU
     { id: 'create-delivery', label: 'Créer Livraison', icon: <FiPlus /> },
     { id: 'profile', label: 'Mon Profil', icon: <FiUser /> },

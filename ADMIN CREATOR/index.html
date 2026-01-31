@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Générateur Super Admin</title>
+    
+    <!-- Styles Tailwind CSS (via CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .loader {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: inline-block;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gray-900 min-h-screen flex items-center justify-center p-4">
+
+    <div class="bg-white rounded-xl shadow-2xl w-full max-w-lg overflow-hidden">
+        <!-- En-tête -->
+        <div class="bg-gradient-to-r from-red-800 to-red-600 p-6 text-white text-center">
+            <h1 class="text-2xl font-bold uppercase tracking-wider">Création Admin Système</h1>
+            <p class="text-red-100 text-sm mt-1">Outil interne - Usage restreint</p>
+        </div>
+
+        <!-- Formulaire -->
+        <div class="p-8">
+            <form id="adminForm" class="space-y-5">
+                
+                <!-- Nom -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Nom complet</label>
+                    <input type="text" id="name" required placeholder="Ex: Jean Directeur"
+                        class="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition">
+                </div>
+
+                <!-- Téléphone (ID) -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Numéro de téléphone (Identifiant)</label>
+                    <input type="tel" id="phone" required placeholder="+237 6XX XXX XXX"
+                        class="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-red-500 focus:border-red-500 outline-none transition">
+                    <p class="text-xs text-gray-500 mt-1">Sera utilisé pour la connexion. <b>Format: +237XXXXXXXXX (sans espaces)</b></p>
+                </div>
+
+                <!-- Mot de passe temporaire -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-1">Mot de passe temporaire</label>
+                    <input type="text" id="password" required placeholder="Ex: Admin1234!" value="123456"
+                        class="w-full px-4 py-3 rounded-lg border border-gray-300 bg-yellow-50 focus:ring-2 focus:ring-red-500 outline-none transition">
+                    <p class="text-xs text-orange-600 mt-1 font-medium">
+                        ⚠️ L'admin devra changer ce mot de passe à sa première connexion.
+                    </p>
+                </div>
+
+                <!-- Actions -->
+                <div class="pt-4">
+                    <button type="submit" id="submitBtn"
+                        class="w-full bg-gray-900 text-white font-bold py-3 px-4 rounded-lg hover:bg-black transition duration-300 flex items-center justify-center gap-2">
+                        <span>Enregistrer l'Administrateur</span>
+                    </button>
+                </div>
+            </form>
+
+            <!-- Feedback Message -->
+            <div id="messageBox" class="hidden mt-4 p-4 rounded-lg text-sm font-medium text-center"></div>
+        </div>
+    </div>
+
+    <!-- Logique JavaScript avec Firebase -->
+    <script type="module">
+        // Import des fonctions Firebase nécessaires
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-app.js";
+        import { getFirestore, collection, addDoc, query, where, getDocs, serverTimestamp } from "https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore.js";
+
+        // ==========================================
+        // CONFIGURATION FIREBASE
+        // ==========================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyC7RzSb3xgGlK2iUrcsvMUNEoQW9psco6o",
+            authDomain: "app-global-express-delivery.firebaseapp.com",
+            databaseURL: "https://app-global-express-delivery-default-rtdb.firebaseio.com",
+            projectId: "app-global-express-delivery",
+            storageBucket: "app-global-express-delivery.firebasestorage.app",
+            messagingSenderId: "349572887102",
+            appId: "1:349572887102:web:c80d0a700fdcc9e079576f",
+            measurementId: "G-Q7VD7D211M"
+        };
+
+        // Initialisation
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        // Références DOM
+        const form = document.getElementById('adminForm');
+        const submitBtn = document.getElementById('submitBtn');
+        const messageBox = document.getElementById('messageBox');
+
+        // Gestionnaire de soumission
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            // UI Loading
+            const originalBtnText = submitBtn.innerHTML;
+            submitBtn.innerHTML = '<div class="loader"></div> Traitement...';
+            submitBtn.disabled = true;
+            messageBox.className = 'hidden';
+
+            const name = document.getElementById('name').value.trim();
+            const phone = document.getElementById('phone').value.trim().replace(/\s/g, ''); // Enlever les espaces
+            const password = document.getElementById('password').value;
+
+            try {
+                // 1. Vérifier si le téléphone existe déjà
+                // IMPORTANT: On utilise "telephone" (comme dans authService.js)
+                const q = query(collection(db, "admins"), where("telephone", "==", phone));
+                const snapshot = await getDocs(q);
+
+                if (!snapshot.empty) {
+                    throw new Error("Ce numéro de téléphone est déjà enregistré comme administrateur.");
+                }
+
+                // 2. Créer le document dans Firestore
+                // STRUCTURE COMPATIBLE avec authService.js:
+                // - Collection: "admins"
+                // - Champs: nom, telephone, motDePasse, statut, role, mustChangePassword
+                await addDoc(collection(db, "admins"), {
+                    nom: name,                          // Correspond à adminData.nom dans authService.js
+                    telephone: phone,                   // Correspond à adminData.telephone dans authService.js
+                    motDePasse: password,               // Correspond à adminData.motDePasse dans authService.js
+                    mustChangePassword: true,           // Force le changement au premier login
+                    role: 'super_admin',               // Correspond à adminData.role dans authService.js
+                    statut: 'actif',                   // OBLIGATOIRE: authService.js vérifie statut === 'actif'
+                    dateCreation: new Date().toISOString(),
+                    createdAt: serverTimestamp(),
+                    createdBy: 'Manual Tool'
+                });
+
+                // Succès
+                showMessage("success", `✅ Administrateur <b>${name}</b> créé avec succès !<br><small>Identifiant: ${phone} | Mot de passe: ${password}</small>`);
+                form.reset();
+                document.getElementById('password').value = "123456"; // Remettre la valeur par défaut
+
+            } catch (error) {
+                console.error(error);
+                showMessage("error", `❌ Erreur : ${error.message}`);
+            } finally {
+                submitBtn.innerHTML = originalBtnText;
+                submitBtn.disabled = false;
+            }
+        });
+
+        function showMessage(type, html) {
+            messageBox.innerHTML = html;
+            messageBox.classList.remove('hidden', 'bg-green-100', 'text-green-800', 'bg-red-100', 'text-red-800');
+            
+            if (type === 'success') {
+                messageBox.classList.add('bg-green-100', 'text-green-800', 'block');
+            } else {
+                messageBox.classList.add('bg-red-100', 'text-red-800', 'block');
+            }
+        }
+    </script>
+</body>
+</html>

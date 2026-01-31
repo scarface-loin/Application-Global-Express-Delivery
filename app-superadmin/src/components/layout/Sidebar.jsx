@@ -33,7 +33,6 @@ export const Sidebar = ({ isOpen, onClose, currentPage, setCurrentPage }) => {
     { id: 'driver-salary', label: 'Salaires Livreurs', icon: <FiDollarSign /> },
     { id: 'history', label: 'Historique', icon: <FiClock /> },
     { id: 'create-delivery', label: 'Créer Livraison', icon: <FiPlus /> },
-    { id: 'profile', label: 'Mon Profil', icon: <FiUser /> },
   ];
 
   return (

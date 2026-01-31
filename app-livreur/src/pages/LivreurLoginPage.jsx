@@ -1,15 +1,12 @@
 import React, { useState } from 'react';
 import { FiTruck, FiPhone, FiLock, FiAlertCircle } from 'react-icons/fi';
+import { collection, query, where, getDocs } from 'firebase/firestore'; 
+import { db } from '../services/firebase'; 
+import bcrypt from 'bcryptjs'; 
 
 /**
  * Page de connexion pour les livreurs
- * 
- * NOTES D'IMPLÉMENTATION :
- * - Pour l'instant, utilise une authentification simplifiée (téléphone uniquement)
- * - À améliorer avec Firebase Auth ou un système de hash de mot de passe
- * - Le mot de passe par défaut est vérifié contre livreur.motDePasseHash
  */
-
 export default function LivreurLoginPage({ onLogin }) {
   const [telephone, setTelephone] = useState('');
   const [motDePasse, setMotDePasse] = useState('');
@@ -18,72 +15,62 @@ export default function LivreurLoginPage({ onLogin }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
     setLoading(true);
+    setError('');
 
     try {
-      // ⚠️ AUTHENTIFICATION SIMPLIFIÉE - À AMÉLIORER EN PRODUCTION
-      // Cette logique devrait être dans un fichier Logic séparé
-      
-      // 1. Chercher le livreur par téléphone
-      const { collection, query, where, getDocs } = await import('firebase/firestore');
-      const { db } = await import('../../../services/firebase');
-      
-      const livreursRef = collection(db, 'livreurs');
-      const q = query(livreursRef, where('telephone', '==', telephone.replace(/\s/g, '')));
-      const snapshot = await getDocs(q);
-      
-      if (snapshot.empty) {
-        throw new Error('Numéro de téléphone non reconnu');
+      const cleanPhone = telephone.replace(/\s/g, '');
+      if (!cleanPhone) {
+        throw new Error("Veuillez entrer un numéro de téléphone.");
       }
-      
-      const livreurDoc = snapshot.docs[0];
+
+      const q = query(
+        collection(db, "livreurs"),
+        where("telephone", "==", cleanPhone)
+      );
+
+      const querySnapshot = await getDocs(q);
+
+      if (querySnapshot.empty) {
+        throw new Error("Numéro de téléphone inconnu.");
+      }
+
+      const livreurDoc = querySnapshot.docs[0];
       const livreurData = livreurDoc.data();
-      
-      // 2. Vérifier le statut
+
       if (livreurData.statut !== 'actif') {
-        throw new Error('Votre compte est désactivé. Contactez l\'administration.');
+        throw new Error("Ce compte est désactivé.");
       }
-      
-      // 3. Vérifier le mot de passe
-      // ⚠️ EN PRODUCTION : Utiliser bcrypt ou Firebase Auth
-      // Pour l'instant, on compare directement (très peu sécurisé)
-      if (motDePasse !== '123456' && livreurData.motDePasseHash !== motDePasse) {
-        throw new Error('Mot de passe incorrect');
+
+      const hashedPasswordFromDB = livreurData.motDePasseHash;
+
+      let passwordMatch = false;
+      if (!hashedPasswordFromDB) {
+         if (String(livreurData.motDePasse).trim() === String(motDePasse).trim()) {
+             passwordMatch = true;
+         }
+      } else {
+         passwordMatch = await bcrypt.compare(motDePasse, hashedPasswordFromDB);
       }
-      
-      // 4. Vérifier si c'est la première connexion
-      if (livreurData.isFirstLogin) {
-        // TODO : Rediriger vers page de changement de mot de passe
-        alert('⚠️ Première connexion : Vous devez changer votre mot de passe par défaut.');
+
+      if (!passwordMatch) {
+        throw new Error("Mot de passe incorrect.");
       }
-      
-      // 5. Connexion réussie
-      const userData = {
-        id: livreurDoc.id,
-        nom: livreurData.nom,
-        telephone: livreurData.telephone,
-        photoUrl: livreurData.photoUrl
-      };
-      
-      // Sauvegarder dans localStorage (ou Context/Redux)
-      localStorage.setItem('livreur_auth', JSON.stringify(userData));
-      
-      // Callback vers le parent
-      onLogin(userData);
-      
+
+      // Connexion réussie, passer isFirstLogin à onLogin
+      onLogin({ id: livreurDoc.id, ...livreurData, isFirstLogin: livreurData.isFirstLogin }); // <--- MODIFICATION ICI
+
     } catch (err) {
-      console.error('Erreur de connexion:', err);
-      setError(err.message || 'Erreur de connexion');
+      console.error(err); 
+      setError(err.message);
     } finally {
       setLoading(false);
     }
   };
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-600 to-indigo-700 flex items-center justify-center p-4">
       <div className="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-md">
-        
+
         {/* Logo et titre */}
         <div className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-20 h-20 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl mb-4 shadow-lg">
@@ -108,7 +95,7 @@ export default function LivreurLoginPage({ onLogin }) {
 
         {/* Formulaire */}
         <form onSubmit={handleSubmit} className="space-y-5">
-          
+
           {/* Champ téléphone */}
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">
@@ -185,8 +172,8 @@ export default function LivreurLoginPage({ onLogin }) {
             <button
               type="button"
               onClick={() => {
-                setTelephone('+237691234567');
-                setMotDePasse('123456');
+                setTelephone('+237699999999'); // Utiliser le numéro du livreur test
+                setMotDePasse('123456'); // Mot de passe par défaut
               }}
               className="text-xs text-gray-500 hover:text-blue-600 underline"
             >

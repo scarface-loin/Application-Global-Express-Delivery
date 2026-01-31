@@ -1,5 +1,5 @@
 /**
- * 🏷️ COMPOSANT StatusBadge - Badge de statut
+ * 🏷️ COMPOSANT StatusBadge - Badge de statut (Optimisé Android)
  */
 
 import React from 'react';
@@ -16,9 +16,9 @@ export default function StatusBadge({ statut }) {
                statut === 'en_cours' ? '🚚' : null;
 
   return (
-    <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold ${colors.bg} ${colors.text}`}>
-      {icon && <span>{icon}</span>}
-      {label}
+    <span className={`inline-flex items-center gap-2 px-4 py-2 rounded-full text-sm font-bold ${colors.bg} ${colors.text} shadow-sm`}>
+      {icon && <span className="text-base">{icon}</span>}
+      <span className="leading-none">{label}</span>
     </span>
   );
 }

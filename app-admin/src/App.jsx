@@ -11,15 +11,12 @@ import DeliveriesPage from './components/pages/DeliveriesPage';
 import ValidationPage from './components/pages/ValidationPage';
 import CreateDeliveryPage from './components/pages/CreateDeliveryPage';
 import ProfilePage from './components/pages/ProfilePage';
-import AssignDeliveryPage from './components/pages/AssignDeliveryPage';
-// Nouvelles Pages
-import HistoryPage from './components/pages/HistoryPage';        // <--- NOUVEL IMPORT
-import DailySummaryPage from './components/pages/DailySummaryPage'; // <--- NOUVEL IMPORT
+import HistoryPage from './components/pages/HistoryPage';
 
 import AdminNotificationBadge from './components/common/AdminNotificationBadge';
 
 const AppContent = () => {
-  const { token, login } = useAuth();
+  const { token, login } = useAuth(); // On récupère la fonction login ici
   const [currentPage, setCurrentPage] = useState('dashboard');
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [selectedDelivery, setSelectedDelivery] = useState(null);
@@ -33,36 +30,21 @@ const AppContent = () => {
     }
   };
 
-  const handleBack = () => {
-    if (currentPage === 'assign-delivery') {
-      setCurrentPage('deliveries');
-    } else {
-      setCurrentPage('dashboard');
-    }
-  };
+  // --- LOGIQUE DE ROUTING ---
+  // Si pas de token, on affiche UNIQUEMENT la page de login
+  if (!token) {
+    return <LoginPage onLogin={login} />;
+  }
+  // --------------------------
 
   const renderPage = () => {
     switch (currentPage) {
       case 'dashboard': return <Dashboard />;
       case 'deliveries': return <DeliveriesPage onNavigate={handleNavigate} />;
       case 'validation': return <ValidationPage />;
-      
-      case 'daily-summary': // <--- ROUTE RECAP
-        return <DailySummaryPage />;
-      
-      case 'history':      // <--- ROUTE HISTORIQUE
-        return <HistoryPage />;
-        
+      case 'history': return <HistoryPage />;
       case 'create-delivery': return <CreateDeliveryPage />;
       case 'profile': return <ProfilePage />;
-      case 'assign-delivery':
-        return (
-          <AssignDeliveryPage
-            deliveryId={selectedDelivery}
-            onBack={handleBack}
-            onSuccess={() => setCurrentPage('deliveries')}
-          />
-        );
       default: return <Dashboard />;
     }
   };
@@ -71,14 +53,10 @@ const AppContent = () => {
     'dashboard': 'Tableau de bord',
     'deliveries': 'Course du jour',
     'validation': 'Validation des Livraisons',
-    'daily-summary': 'Récapitulatif de la journée', // <--- TITRE
-    'history': 'Historique global',                 // <--- TITRE
+    'history': 'Historique global',
     'create-delivery': 'Créer une Livraison',
     'profile': 'Mon Profil',
-    'assign-delivery': 'Assigner une Livraison',
   };
-
-  if (!token) return <LoginPage onLogin={login} />;
 
   return (
     <div className="min-h-screen bg-gray-50">

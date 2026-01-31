@@ -1,540 +1,357 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { 
-  FiCheck, FiX, FiEdit2, FiTruck, FiPackage, 
-  FiCheckCircle, FiTool, FiCalendar, FiMapPin, 
-  FiXCircle, FiAlertTriangle, FiMinus, FiPlus
+  FiX, FiCheck, FiPackage, FiChevronDown, FiChevronUp, FiRefreshCw, FiTool, FiAlertCircle
 } from 'react-icons/fi';
 
 export default function ValidationModal({ livreur, onClose, onValidateSuccess }) {
-  // --- États ---
-  const [carburant, setCarburant] = useState('5000');
-  const [editingExpedition, setEditingExpedition] = useState(null);
-  const [expeditionFees, setExpeditionFees] = useState({});
-  const [isGarageVisit, setIsGarageVisit] = useState(false);
-  const [garageNote, setGarageNote] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [showConfirmModal, setShowConfirmModal] = useState(false);
-  
-  // NOUVEAU : On gère des quantités au lieu d'un statut unique
-  const [deliveryQuantities, setDeliveryQuantities] = useState({});
-  const [deliveryReasons, setDeliveryReasons] = useState({}); // { 'id-idx-type': 'raison' }
-  const [editingArticle, setEditingArticle] = useState(null);
+  const [localLivraisons, setLocalLivraisons] = useState([]);
+  const [expandedId, setExpandedId] = useState(null);
+  const [notes, setNotes] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const NON_LIVREE_REASONS = ['Client absent', 'Adresse incorrecte', 'Refus partiel/total', 'Argent insuffisant', 'Autre'];
+  // Nouveaux états pour gérer le Cash et le Garage
+  const [cashRecu, setCashRecu] = useState(0); // Ce que l'admin tape
+  const [showGarage, setShowGarage] = useState(false);
+  const [garageData, setGarageData] = useState({
+    motif: '',
+    montantEstime: 0
+  });
 
-  // --- Initialisation ---
+  // Initialisation des données au montage
   useEffect(() => {
-    if (livreur) {
-      const fees = {};
-      const quantities = {};
-      
-      livreur.livraisons.forEach(liv => {
-        if (liv.hasExpedition) {
-          fees[liv.id] = liv.fraisExpedition || 0;
-        }
-        liv.articles.forEach((art, idx) => {
-          const key = `${liv.id}-${idx}`;
-          // Par défaut, tout est considéré comme LIVRÉ
-          quantities[key] = {
-            livree: art.quantite,
-            non_livree: 0,
-            perdu: 0
-          };
-        });
-      });
-      
-      setExpeditionFees(fees);
-      setDeliveryQuantities(quantities);
-      setDeliveryReasons({});
-      setCarburant('5000');
-      setIsGarageVisit(false);
-      setGarageNote('');
-    }
+    const initData = livreur.livraisons.map(liv => {
+      const isLivreBase = liv.statutOriginal === 'livre';
+      const newArticles = liv.articles.map(art => ({
+        ...art,
+        quantiteLivree: isLivreBase ? art.quantiteCommandee : 0,
+        quantiteRetournee: isLivreBase ? 0 : art.quantiteCommandee,
+        quantitePerdue: 0
+      }));
+      return { ...liv, articles: newArticles, fraisAppliques: isLivreBase };
+    });
+    setLocalLivraisons(initData);
   }, [livreur]);
 
-  // --- Logique de modification des quantités ---
-  const updateQuantity = (key, type, delta, maxTotal) => {
-    setDeliveryQuantities(prev => {
-      const current = prev[key];
-      let newState = { ...current };
+  // --- TOTAUX GLOBAUX ---
+  const totals = useMemo(() => {
+    let theorique = 0; // Ce qu'il DOIT avoir
+    let perduArticles = 0; // Valeur marchandise perdue
 
-      // Si on modifie "non_livree" ou "perdu"
-      if (type !== 'livree') {
-        const newValue = newState[type] + delta;
-        // Vérifications bornes
-        if (newValue < 0) return prev;
-        
-        // Calcul du reste disponible pour "livree"
-        const otherType = type === 'non_livree' ? 'perdu' : 'non_livree';
-        const remainingForLivree = maxTotal - (newValue + newState[otherType]);
-        
-        if (remainingForLivree < 0) return prev; // Impossible de dépasser le total
+    localLivraisons.forEach(liv => {
+      let livTotal = 0;
+      liv.articles.forEach(art => {
+        theorique += (art.quantiteLivree * art.coutUnitaire);
+        livTotal += (art.quantiteLivree * art.coutUnitaire);
+        perduArticles += (art.quantitePerdue * art.coutUnitaire);
+      });
 
-        newState[type] = newValue;
-        newState.livree = remainingForLivree;
+      if (liv.fraisAppliques) {
+        theorique += liv.coutPrestation;
+        livTotal += liv.coutPrestation;
       }
-      return { ...prev, [key]: newState };
-    });
-  };
-
-  // --- Calculs mis à jour ---
-  const calculateTotalCollected = () => {
-    let total = 0;
-    livreur.livraisons.forEach(delivery => {
-      delivery.articles.forEach((article, idx) => {
-        const key = `${delivery.id}-${idx}`;
-        const qty = deliveryQuantities[key];
-        if (qty) {
-          total += qty.livree * article.cout;
-        }
-      });
-    });
-    return total;
-  };
-
-  const calculateTotalLost = () => {
-    let total = 0;
-    livreur.livraisons.forEach(delivery => {
-      delivery.articles.forEach((article, idx) => {
-        const key = `${delivery.id}-${idx}`;
-        const qty = deliveryQuantities[key];
-        if (qty) {
-          total += qty.perdu * article.cout;
-        }
-      });
-    });
-    return total;
-  };
-
-  const calculateTotalExpeditionFees = () => {
-    return livreur.livraisons.reduce((sum, delivery) => {
-      if (delivery.hasExpedition) {
-        return sum + (expeditionFees[delivery.id] || delivery.fraisExpedition || 0);
-      }
-      return sum;
-    }, 0);
-  };
-
-  const calculateExpectedAmount = () => {
-    const total = calculateTotalCollected();
-    const fees = calculateTotalExpeditionFees();
-    const carburantCost = parseFloat(carburant) || 0;
-    const lostAmount = calculateTotalLost();
-    return total - fees - carburantCost - lostAmount;
-  };
-
-  // --- Helpers ---
-  const formatAmount = (amount) => `${amount.toLocaleString()} FCFA`;
-  
-  const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('fr-FR', {
-      weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
-    });
-  };
-
-  // --- Validation ---
-  const handleValidate = () => {
-    const missingReasons = [];
-    livreur.livraisons.forEach(liv => {
-      liv.articles.forEach((article, idx) => {
-        const key = `${liv.id}-${idx}`;
-        const qty = deliveryQuantities[key];
-        if (!qty) return;
-
-        // Vérifier raison pour non_livree
-        if (qty.non_livree > 0 && !deliveryReasons[`${key}-non_livree`]) {
-          missingReasons.push(`${article.nom} (Non livré)`);
-        }
-        // Vérifier raison pour perdu
-        if (qty.perdu > 0 && !deliveryReasons[`${key}-perdu`]) {
-          missingReasons.push(`${article.nom} (Perdu)`);
-        }
-      });
+      liv.totalCalcule = livTotal;
     });
 
-    if (missingReasons.length > 0) {
-      alert(`⚠️ Veuillez indiquer la raison pour :\n- ${missingReasons.join('\n- ')}`);
+    return { theorique, perduArticles };
+  }, [localLivraisons]);
+
+  // Met à jour le cash reçu par défaut quand le théorique change (pour faciliter la saisie)
+  // Sauf si l'utilisateur a déjà commencé à modifier manuellement (optionnel, ici on simplifie)
+  useEffect(() => {
+    setCashRecu(totals.theorique);
+  }, [totals.theorique]);
+
+  // Calcul du cash manquant (Dette financière)
+  const cashManquant = Math.max(0, totals.theorique - cashRecu);
+
+  // --- LOGIQUE DE CALCUL ARTICLES ---
+  const updateArticleQuantity = (livraisonIndex, articleIndex, type, delta) => {
+    const newLivraisons = [...localLivraisons];
+    const article = newLivraisons[livraisonIndex].articles[articleIndex];
+    const currentTotalAssigned = article.quantiteLivree + article.quantiteRetournee + article.quantitePerdue;
+    
+    if (delta > 0) {
+      if (currentTotalAssigned < article.quantiteCommandee) article[type] += 1;
+    } else {
+      if (article[type] > 0) article[type] -= 1;
+    }
+
+    const hasDeliveredItem = newLivraisons[livraisonIndex].articles.some(a => a.quantiteLivree > 0);
+    newLivraisons[livraisonIndex].fraisAppliques = hasDeliveredItem;
+
+    setLocalLivraisons(newLivraisons);
+  };
+
+  const toggleFrais = (index) => {
+    const newLivraisons = [...localLivraisons];
+    newLivraisons[index].fraisAppliques = !newLivraisons[index].fraisAppliques;
+    setLocalLivraisons(newLivraisons);
+  };
+
+  // --- VALIDATION FINALE ---
+  const handleConfirm = async () => {
+    // Vérification articles
+    const isAllAssigned = localLivraisons.every(liv => 
+      liv.articles.every(art => 
+        (art.quantiteLivree + art.quantiteRetournee + art.quantitePerdue) === art.quantiteCommandee
+      )
+    );
+
+    if (!isAllAssigned) {
+      if (!window.confirm("Certains articles n'ont pas été totalement assignés. Continuer ?")) return;
+    }
+
+    // Vérification Garage
+    if (showGarage && (!garageData.motif || garageData.montantEstime <= 0)) {
+      alert("Veuillez remplir le motif et le montant pour le Garage.");
       return;
     }
-    setShowConfirmModal(true);
+
+    setIsSubmitting(true);
+    try {
+      await onValidateSuccess({
+        montantTheorique: totals.theorique,
+        montantRecu: parseFloat(cashRecu),
+        montantPerduArticles: totals.perduArticles,
+        livraisons: localLivraisons,
+        notes: notes,
+        // Données garage
+        garageRequest: showGarage ? {
+          actif: true,
+          motif: garageData.motif,
+          description: notes,
+          montantEstime: parseFloat(garageData.montantEstime)
+        } : null
+      });
+    } catch (e) {
+      alert("Erreur: " + e.message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const confirmValidation = () => {
-    setLoading(true);
-    setTimeout(() => {
-      const expectedAmount = calculateExpectedAmount();
-      alert(`✅ Validation enregistrée!\nMontant attendu: ${formatAmount(expectedAmount)}`);
-      setLoading(false);
-      setShowConfirmModal(false);
-      onValidateSuccess(livreur.id);
-      onClose();
-    }, 1000);
-  };
+  const toggleExpand = (id) => setExpandedId(expandedId === id ? null : id);
 
   return (
-    <div className="fixed inset-0 z-50 bg-gray-50 flex flex-col">
-      <div className="w-full h-full flex flex-col overflow-hidden">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 backdrop-blur-sm animate-fade-in">
+      <div className="bg-white rounded-3xl shadow-2xl max-w-3xl w-full max-h-[95vh] flex flex-col">
         
-        {/* Header - Mobile Optimized */}
-        <div className="bg-white border-b border-gray-200 px-4 py-3 shrink-0 shadow-sm">
-            <div className="flex items-center justify-between mb-2">
-                <div className="flex items-center gap-3">
-                    <div className="text-2xl">{livreur.photo}</div>
-                    <div>
-                        <h2 className="text-lg font-bold text-gray-900">{livreur.nom}</h2>
-                        <div className="flex items-center gap-1.5 text-xs text-gray-500">
-                            <span>{livreur.id}</span>
-                        </div>
-                    </div>
-                </div>
-                <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full active:bg-gray-200 transition-colors">
-                    <FiX size={22} className="text-gray-600" />
-                </button>
-            </div>
-            <div className="flex items-center gap-1.5 text-xs text-gray-400">
-                <FiCalendar size={12} />
-                <span>{formatDate(livreur.date)}</span>
-            </div>
+        {/* Header */}
+        <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-3xl">
+          <div>
+            <h2 className="text-xl font-bold text-gray-900">Validation: {livreur.nom}</h2>
+            <p className="text-sm text-gray-500">Vérifiez les articles et encaissez l'argent</p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full">
+            <FiX size={24} className="text-gray-500" />
+          </button>
         </div>
 
-        {/* Corps scrollable - Mobile First */}
-        <div className="flex-1 overflow-y-auto px-3 py-4 space-y-3 pb-32">
-            
-            {/* --- Section Articles Simplifiée --- */}
-            {livreur.livraisons.map((delivery) => (
-                <div key={delivery.id} className="bg-white rounded-xl shadow-sm p-3 border border-gray-100">
-                    {/* En-tête livraison */}
-                    <div className="flex items-start gap-2 mb-3 pb-2 border-b border-gray-100">
-                        <FiMapPin className="text-gray-400 mt-0.5 shrink-0" size={16} />
-                        <div className="flex-1 min-w-0">
-                            <div className="font-bold text-gray-900 text-sm truncate">{delivery.quartier}</div>
-                            <div className="text-xs text-gray-500 bg-gray-50 px-2 py-0.5 rounded inline-block mt-1">{delivery.type}</div>
-                        </div>
-                    </div>
+        {/* Corps Scrollable */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-5 bg-gray-50/50">
+          
+          {/* SECTION 1: Résumé Financier & Encaissement */}
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+              
+              {/* Total Théorique */}
+              <div className="p-3 bg-blue-50 rounded-lg border border-blue-100">
+                <p className="text-xs font-bold text-blue-600 uppercase mb-1">Total Théorique</p>
+                <p className="text-2xl font-bold text-blue-900">{totals.theorique.toLocaleString()} F</p>
+                <p className="text-[10px] text-blue-400">Calculé sur les articles livrés</p>
+              </div>
 
-                    {/* Articles */}
-                    <div className="space-y-3">
-                        {delivery.articles.map((article, idx) => {
-                            const articleKey = `${delivery.id}-${idx}`;
-                            const qty = deliveryQuantities[articleKey] || { livree: article.quantite, non_livree: 0, perdu: 0 };
-                            const isEditing = editingArticle === articleKey;
+              {/* Saisie Montant Reçu */}
+              <div className="p-3 bg-green-50 rounded-lg border border-green-100">
+                <p className="text-xs font-bold text-green-600 uppercase mb-1">Montant Reçu (Cash)</p>
+                <input 
+                  type="number"
+                  value={cashRecu}
+                  onChange={(e) => setCashRecu(parseFloat(e.target.value) || 0)}
+                  className="w-full text-2xl font-bold text-green-900 bg-transparent border-b-2 border-green-200 focus:border-green-500 outline-none"
+                />
+                <p className="text-[10px] text-green-400">Modifiez si perte d'argent</p>
+              </div>
 
-                            return (
-                                <div key={idx} className="border-2 border-gray-100 rounded-xl p-3">
-                                    
-                                    {/* Header Article - Simplifié */}
-                                    <div className="flex items-start justify-between gap-2 mb-2">
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-2 mb-1">
-                                              <span className="bg-gray-900 text-white text-xs font-bold px-2 py-0.5 rounded shrink-0">{article.quantite}</span>
-                                              <p className="font-bold text-gray-900 text-sm truncate">{article.nom}</p>
-                                            </div>
-                                            <p className="text-xs text-gray-500">{article.cout.toLocaleString()} FCFA/u</p>
-                                        </div>
-                                        
-                                        {/* Toggle Edit Button */}
-                                        <button 
-                                          onClick={() => setEditingArticle(isEditing ? null : articleKey)}
-                                          className={`p-2.5 rounded-lg transition-all shrink-0 ${isEditing ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600 active:bg-gray-200'}`}
-                                        >
-                                            {isEditing ? <FiCheck size={18} /> : <FiEdit2 size={18} />}
-                                        </button>
-                                    </div>
-
-                                    {/* Statut Summary - Toujours visible */}
-                                    {!isEditing && (
-                                      <div className="space-y-1.5">
-                                        {qty.livree > 0 && (
-                                          <div className="flex items-center justify-between bg-green-50 px-3 py-2 rounded-lg border border-green-100">
-                                            <span className="text-xs font-medium text-green-700">Livrés</span>
-                                            <span className="text-sm font-bold text-green-700">{qty.livree} • +{formatAmount(qty.livree * article.cout)}</span>
-                                          </div>
-                                        )}
-                                        {qty.non_livree > 0 && (
-                                          <div className="flex items-center justify-between bg-orange-50 px-3 py-2 rounded-lg border border-orange-100">
-                                            <span className="text-xs font-medium text-orange-700">Non livrés</span>
-                                            <span className="text-sm font-bold text-orange-700">{qty.non_livree}</span>
-                                          </div>
-                                        )}
-                                        {qty.perdu > 0 && (
-                                          <div className="flex items-center justify-between bg-red-50 px-3 py-2 rounded-lg border border-red-100">
-                                            <span className="text-xs font-medium text-red-700">Perdus</span>
-                                            <span className="text-sm font-bold text-red-700">{qty.perdu} • -{formatAmount(qty.perdu * article.cout)}</span>
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-
-                                    {/* Zone d'édition Mobile - Swipe-friendly */}
-                                    {isEditing && (
-                                      <div className="mt-3 pt-3 border-t border-gray-200 space-y-3">
-                                        
-                                        {/* Livré - Non éditable mais visible */}
-                                        <div className="bg-green-50 rounded-lg p-3 border-2 border-green-200">
-                                          <div className="flex items-center justify-between mb-1">
-                                            <span className="text-xs font-bold text-green-800 uppercase">Livrés</span>
-                                            <FiCheckCircle className="text-green-600" size={16} />
-                                          </div>
-                                          <div className="text-center py-1">
-                                            <span className="text-3xl font-bold text-green-700">{qty.livree}</span>
-                                            <span className="text-xs text-green-600 block">sur {article.quantite}</span>
-                                          </div>
-                                        </div>
-
-                                        {/* Non Livré - Touch Optimized */}
-                                        <div className="bg-orange-50 rounded-lg p-3 border-2 border-orange-200">
-                                          <div className="flex items-center justify-between mb-2">
-                                            <span className="text-xs font-bold text-orange-800 uppercase">Non livrés (Retour)</span>
-                                            <FiXCircle className="text-orange-600" size={16} />
-                                          </div>
-                                          
-                                          <div className="flex items-center justify-center gap-3 mb-2">
-                                            <button 
-                                              onClick={() => updateQuantity(articleKey, 'non_livree', -1, article.quantite)}
-                                              className="w-12 h-12 rounded-xl bg-white border-2 border-orange-300 text-orange-700 font-bold text-xl active:bg-orange-100 disabled:opacity-30 disabled:active:bg-white transition-colors"
-                                              disabled={qty.non_livree <= 0}
-                                            >
-                                              <FiMinus className="mx-auto" size={20} />
-                                            </button>
-                                            <span className="font-bold text-3xl text-gray-900 w-12 text-center">{qty.non_livree}</span>
-                                            <button 
-                                              onClick={() => updateQuantity(articleKey, 'non_livree', 1, article.quantite)}
-                                              className="w-12 h-12 rounded-xl bg-white border-2 border-orange-300 text-orange-700 font-bold text-xl active:bg-orange-100 disabled:opacity-30 disabled:active:bg-white transition-colors"
-                                              disabled={qty.livree <= 0}
-                                            >
-                                              <FiPlus className="mx-auto" size={20} />
-                                            </button>
-                                          </div>
-                                          
-                                          {qty.non_livree > 0 && (
-                                            <select 
-                                              className="w-full text-sm border-2 border-orange-300 rounded-lg p-2.5 focus:border-orange-500 focus:outline-none bg-white"
-                                              value={deliveryReasons[`${articleKey}-non_livree`] || ''}
-                                              onChange={(e) => setDeliveryReasons({...deliveryReasons, [`${articleKey}-non_livree`]: e.target.value})}
-                                            >
-                                                <option value="">Raison...</option>
-                                                {NON_LIVREE_REASONS.map(r => <option key={r} value={r}>{r}</option>)}
-                                            </select>
-                                          )}
-                                        </div>
-
-                                        {/* Perdu - Touch Optimized */}
-                                        <div className="bg-red-50 rounded-lg p-3 border-2 border-red-200">
-                                          <div className="flex items-center justify-between mb-2">
-                                            <span className="text-xs font-bold text-red-800 uppercase">Perdus (Dette)</span>
-                                            <FiAlertTriangle className="text-red-600" size={16} />
-                                          </div>
-                                          
-                                          <div className="flex items-center justify-center gap-3 mb-2">
-                                            <button 
-                                              onClick={() => updateQuantity(articleKey, 'perdu', -1, article.quantite)}
-                                              className="w-12 h-12 rounded-xl bg-white border-2 border-red-300 text-red-700 font-bold text-xl active:bg-red-100 disabled:opacity-30 disabled:active:bg-white transition-colors"
-                                              disabled={qty.perdu <= 0}
-                                            >
-                                              <FiMinus className="mx-auto" size={20} />
-                                            </button>
-                                            <span className="font-bold text-3xl text-gray-900 w-12 text-center">{qty.perdu}</span>
-                                            <button 
-                                              onClick={() => updateQuantity(articleKey, 'perdu', 1, article.quantite)}
-                                              className="w-12 h-12 rounded-xl bg-white border-2 border-red-300 text-red-700 font-bold text-xl active:bg-red-100 disabled:opacity-30 disabled:active:bg-white transition-colors"
-                                              disabled={qty.livree <= 0}
-                                            >
-                                              <FiPlus className="mx-auto" size={20} />
-                                            </button>
-                                          </div>
-                                          
-                                          {qty.perdu > 0 && (
-                                            <input 
-                                              type="text"
-                                              placeholder="Circonstances de la perte..."
-                                              className="w-full text-sm border-2 border-red-300 rounded-lg p-2.5 focus:border-red-500 focus:outline-none bg-white"
-                                              value={deliveryReasons[`${articleKey}-perdu`] || ''}
-                                              onChange={(e) => setDeliveryReasons({...deliveryReasons, [`${articleKey}-perdu`]: e.target.value})}
-                                            />
-                                          )}
-                                        </div>
-                                      </div>
-                                    )}
-                                </div>
-                            );
-                        })}
-                    </div>
-                    
-                    {/* Frais Expédition - Simplifié */}
-                    {delivery.hasExpedition && (
-                        <div className="mt-3 pt-3 border-t border-gray-100">
-                            <div className="flex items-center justify-between">
-                                <span className="text-sm font-medium text-gray-700">Frais expédition</span>
-                                {editingExpedition === delivery.id ? (
-                                    <div className="flex gap-2 items-center">
-                                        <input 
-                                          type="number" 
-                                          className="w-24 p-2 border-2 border-blue-300 rounded-lg text-right font-bold focus:outline-none focus:border-blue-500" 
-                                          value={expeditionFees[delivery.id] || 0} 
-                                          onChange={(e) => setExpeditionFees({...expeditionFees, [delivery.id]: parseFloat(e.target.value) || 0})} 
-                                          autoFocus 
-                                        />
-                                        <button 
-                                          onClick={() => setEditingExpedition(null)} 
-                                          className="p-2 bg-green-500 text-white rounded-lg active:bg-green-600"
-                                        >
-                                          <FiCheck size={18} />
-                                        </button>
-                                    </div>
-                                ) : (
-                                    <button 
-                                      onClick={() => setEditingExpedition(delivery.id)}
-                                      className="flex items-center gap-2 active:bg-gray-50 px-2 py-1 rounded-lg transition-colors"
-                                    >
-                                        <span className="font-bold text-red-600">-{formatAmount(expeditionFees[delivery.id] || 0)}</span>
-                                        <FiEdit2 size={14} className="text-gray-400" />
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-                    )}
-                </div>
-            ))}
-
-            {/* --- Dépenses & Garage - Mobile Stack --- */}
-            <div className="bg-white rounded-xl shadow-sm p-4 space-y-4">
-                <div>
-                    <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2 text-sm">
-                        <FiTruck className="text-red-600"/> Dépenses
-                    </h3>
-                    <div className="space-y-3">
-                        <div className="flex justify-between items-center text-sm">
-                            <span className="text-gray-600">Frais Expédition</span>
-                            <span className="font-bold text-red-600">-{formatAmount(calculateTotalExpeditionFees())}</span>
-                        </div>
-                        <div>
-                            <label className="block text-xs font-medium text-gray-700 mb-1.5">Carburant</label>
-                            <div className="flex items-center gap-2">
-                                <input 
-                                    type="number" 
-                                    value={carburant} 
-                                    onChange={(e) => setCarburant(e.target.value)} 
-                                    className="flex-1 px-3 py-2.5 border-2 border-gray-200 rounded-xl font-bold text-right text-lg focus:border-blue-400 focus:outline-none"
-                                />
-                                <span className="text-sm font-medium text-gray-500 shrink-0">FCFA</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div className="pt-4 border-t border-gray-100">
-                    <div className="flex items-center justify-between mb-3">
-                        <h3 className="font-bold text-gray-800 flex items-center gap-2 text-sm">
-                            <FiTool className="text-orange-600"/> Passage Garage
-                        </h3>
-                        <label className="relative inline-flex items-center cursor-pointer">
-                          <input 
-                            type="checkbox" 
-                            checked={isGarageVisit} 
-                            onChange={(e) => setIsGarageVisit(e.target.checked)} 
-                            className="sr-only peer"
-                          />
-                          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                        </label>
-                    </div>
-                    {isGarageVisit && (
-                        <textarea 
-                            value={garageNote} 
-                            onChange={(e) => setGarageNote(e.target.value)}
-                            placeholder="Note pour le garage..."
-                            className="w-full p-3 border-2 border-gray-200 rounded-xl text-sm resize-none focus:border-blue-400 focus:outline-none"
-                            rows="3"
-                        />
-                    )}
-                </div>
+              {/* Écart / Manquant */}
+              <div className={`p-3 rounded-lg border ${cashManquant > 0 ? 'bg-red-50 border-red-100' : 'bg-gray-50 border-gray-100'}`}>
+                <p className={`text-xs font-bold uppercase mb-1 ${cashManquant > 0 ? 'text-red-600' : 'text-gray-500'}`}>Manquant (Dette)</p>
+                <p className={`text-2xl font-bold ${cashManquant > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+                  {cashManquant.toLocaleString()} F
+                </p>
+                {totals.perduArticles > 0 && (
+                   <p className="text-[10px] text-red-400">+ {totals.perduArticles.toLocaleString()} F de marchandises</p>
+                )}
+              </div>
             </div>
 
-            {/* --- Résumé - Mobile Optimized --- */}
-            <div className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-xl shadow-lg p-4 text-white">
-                <h3 className="font-bold text-base mb-3 flex items-center gap-2">
-                    <FiCheckCircle /> Récapitulatif
-                </h3>
-                <div className="space-y-2 text-sm">
-                    <div className="flex justify-between items-center">
-                        <span className="text-blue-100">Collecté</span>
-                        <span className="font-bold text-base">+{formatAmount(calculateTotalCollected())}</span>
-                    </div>
-                    {calculateTotalLost() > 0 && (
-                      <div className="flex justify-between items-center text-red-200">
-                        <span>Pertes</span>
-                        <span className="font-bold text-base">-{formatAmount(calculateTotalLost())}</span>
+            {/* Bouton Garage */}
+            <div className="flex justify-end">
+              <button 
+                onClick={() => {
+                  setShowGarage(!showGarage);
+                  if(!showGarage && cashManquant > 0) {
+                     setGarageData(prev => ({...prev, montantEstime: cashManquant}));
+                  }
+                }}
+                className={`text-sm flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all ${showGarage ? 'bg-orange-100 text-orange-700' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              >
+                <FiTool />
+                {showGarage ? "Annuler Garage" : "Déclarer un passage au Garage ?"}
+              </button>
+            </div>
+
+            {/* Formulaire Garage */}
+            {showGarage && (
+              <div className="mt-4 p-4 bg-orange-50 rounded-xl border border-orange-100 animate-fade-in">
+                <div className="flex items-start gap-2 mb-3">
+                  <FiAlertCircle className="text-orange-500 mt-1" />
+                  <p className="text-xs text-orange-800">
+                    Cette demande sera envoyée au Super Admin pour validation. 
+                    Le montant déclaré ici sera ajouté à la dette du livreur en attendant la validation.
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-gray-500">Motif (ex: Vidange, Panne)</label>
+                    <input 
+                      type="text"
+                      value={garageData.motif}
+                      onChange={(e) => setGarageData({...garageData, motif: e.target.value})}
+                      className="w-full mt-1 p-2 border border-orange-200 rounded-lg text-sm focus:ring-orange-500"
+                      placeholder="Ex: Pneu crevé"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-500">Montant dépensé</label>
+                    <input 
+                      type="number"
+                      value={garageData.montantEstime}
+                      onChange={(e) => setGarageData({...garageData, montantEstime: e.target.value})}
+                      className="w-full mt-1 p-2 border border-orange-200 rounded-lg text-sm focus:ring-orange-500"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* SECTION 2: Liste des Livraisons (Articles) */}
+          <div className="space-y-3">
+            <h3 className="text-sm font-bold text-gray-500 uppercase">Détail des colis</h3>
+            {localLivraisons.map((liv, lIdx) => {
+              const isExpanded = expandedId === liv.id;
+              const articlesTotal = liv.articles.reduce((acc, a) => acc + a.quantiteCommandee, 0);
+              const assignedTotal = liv.articles.reduce((acc, a) => acc + a.quantiteLivree + a.quantiteRetournee + a.quantitePerdue, 0);
+              const isFullyAssigned = articlesTotal === assignedTotal;
+
+              return (
+                <div key={liv.id} className={`bg-white border rounded-xl overflow-hidden transition-all ${isExpanded ? 'border-blue-300 shadow-md' : 'border-gray-200'}`}>
+                  
+                  <div 
+                    onClick={() => toggleExpand(liv.id)}
+                    className="p-3 flex justify-between items-center cursor-pointer hover:bg-gray-50"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`p-2 rounded-lg ${isFullyAssigned ? 'bg-green-100 text-green-700' : 'bg-orange-100 text-orange-700'}`}>
+                        <FiPackage />
                       </div>
-                    )}
-                    <div className="flex justify-between items-center opacity-90">
-                        <span className="text-blue-100">Dépenses</span>
-                        <span className="font-bold text-base">-{formatAmount(calculateTotalExpeditionFees() + (parseFloat(carburant)||0))}</span>
-                    </div>
-                    <div className="border-t border-white/30 my-2 pt-3 flex justify-between items-center">
-                        <span className="font-bold text-base">Montant Attendu</span>
-                        <span className="font-bold text-2xl">{formatAmount(calculateExpectedAmount())}</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        {/* Footer - Fixed Mobile */}
-        <div className="fixed bottom-0 left-0 right-0 bg-white border-t-2 border-gray-200 p-3 flex gap-2 shadow-2xl z-20">
-            <button 
-              onClick={onClose} 
-              className="flex-1 px-4 py-3.5 rounded-xl font-bold text-gray-700 bg-gray-100 active:bg-gray-200 transition-colors text-base"
-            >
-                Annuler
-            </button>
-            <button 
-              onClick={handleValidate} 
-              className="flex-1 px-4 py-3.5 rounded-xl font-bold text-white bg-green-600 active:bg-green-700 shadow-lg flex items-center justify-center gap-2 text-base"
-            >
-                <FiCheckCircle size={20} /> Valider
-            </button>
-        </div>
-
-        {/* Modal Confirmation - Mobile Optimized */}
-        {showConfirmModal && (
-            <div className="absolute inset-0 bg-white z-50 flex flex-col items-center justify-center p-6">
-                <div className="w-full max-w-md text-center space-y-6">
-                    <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto">
-                        <FiCheckCircle className="text-green-600" size={40} />
-                    </div>
-                    <h2 className="text-2xl font-bold text-gray-900">Confirmer ?</h2>
-                    <div className="bg-blue-50 p-4 rounded-xl border-2 border-blue-200">
-                        <p className="text-sm text-gray-600 mb-1">Montant attendu</p>
-                        <p className="text-3xl font-bold text-gray-900">{formatAmount(calculateExpectedAmount())}</p>
+                      <div>
+                        <p className="font-bold text-gray-800 text-sm">{liv.trackingNumber}</p>
+                        <p className="text-xs text-gray-500">{liv.quartier}</p>
+                      </div>
                     </div>
                     
-                    {calculateTotalLost() > 0 && (
-                        <div className="bg-red-50 p-4 rounded-xl border-2 border-red-200 text-left">
-                            <p className="text-red-800 font-bold text-sm flex items-center gap-2 mb-2">
-                                <FiAlertTriangle size={18} /> Dette générée
-                            </p>
-                            <p className="text-red-700 text-sm">
-                                Articles perdus : <strong className="text-base">{formatAmount(calculateTotalLost())}</strong>
-                            </p>
-                        </div>
-                    )}
-
-                    <div className="flex gap-3 pt-4">
-                        <button 
-                          onClick={() => setShowConfirmModal(false)} 
-                          className="flex-1 py-3.5 rounded-xl bg-gray-200 font-bold text-gray-700 text-base active:bg-gray-300"
-                        >
-                          Retour
-                        </button>
-                        <button 
-                          onClick={confirmValidation} 
-                          disabled={loading} 
-                          className="flex-1 py-3.5 rounded-xl bg-green-600 text-white font-bold active:bg-green-700 disabled:opacity-50 text-base"
-                        >
-                            {loading ? 'Validation...' : 'Confirmer'}
-                        </button>
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        <p className="font-bold text-gray-900">{liv.totalCalcule.toLocaleString()} F</p>
+                      </div>
+                      {isExpanded ? <FiChevronUp /> : <FiChevronDown />}
                     </div>
+                  </div>
+
+                  {isExpanded && (
+                    <div className="p-3 border-t border-gray-100 bg-gray-50">
+                      <div className="grid grid-cols-12 gap-2 text-[10px] font-bold text-gray-400 uppercase mb-2 px-1">
+                        <div className="col-span-4">Article</div>
+                        <div className="col-span-2 text-center text-green-600">Livré</div>
+                        <div className="col-span-2 text-center text-blue-600">Retour</div>
+                        <div className="col-span-2 text-center text-red-600">Perdu</div>
+                        <div className="col-span-2 text-right">Reste</div>
+                      </div>
+
+                      <div className="space-y-2">
+                        {liv.articles.map((art, aIdx) => {
+                          const reste = art.quantiteCommandee - (art.quantiteLivree + art.quantiteRetournee + art.quantitePerdue);
+                          return (
+                            <div key={aIdx} className="bg-white p-2 rounded-lg border border-gray-200 shadow-sm grid grid-cols-12 gap-2 items-center">
+                              <div className="col-span-4">
+                                <p className="text-xs font-bold text-gray-800">{art.nom}</p>
+                                <p className="text-[10px] text-gray-500">{art.coutUnitaire.toLocaleString()} F</p>
+                              </div>
+
+                              <div className="col-span-2 flex justify-center bg-green-50 rounded">
+                                <button onClick={() => updateArticleQuantity(lIdx, aIdx, 'quantiteLivree', -1)} className="px-2 font-bold text-green-700">-</button>
+                                <span className="text-xs font-bold text-green-800 py-1 w-4 text-center">{art.quantiteLivree}</span>
+                                <button onClick={() => updateArticleQuantity(lIdx, aIdx, 'quantiteLivree', 1)} className="px-2 font-bold text-green-700">+</button>
+                              </div>
+
+                              <div className="col-span-2 flex justify-center bg-blue-50 rounded">
+                                <button onClick={() => updateArticleQuantity(lIdx, aIdx, 'quantiteRetournee', -1)} className="px-2 font-bold text-blue-700">-</button>
+                                <span className="text-xs font-bold text-blue-800 py-1 w-4 text-center">{art.quantiteRetournee}</span>
+                                <button onClick={() => updateArticleQuantity(lIdx, aIdx, 'quantiteRetournee', 1)} className="px-2 font-bold text-blue-700">+</button>
+                              </div>
+
+                              <div className="col-span-2 flex justify-center bg-red-50 rounded">
+                                <button onClick={() => updateArticleQuantity(lIdx, aIdx, 'quantitePerdue', -1)} className="px-2 font-bold text-red-700">-</button>
+                                <span className="text-xs font-bold text-red-800 py-1 w-4 text-center">{art.quantitePerdue}</span>
+                                <button onClick={() => updateArticleQuantity(lIdx, aIdx, 'quantitePerdue', 1)} className="px-2 font-bold text-red-700">+</button>
+                              </div>
+
+                              <div className="col-span-2 text-right">
+                                {reste === 0 ? <FiCheck className="ml-auto text-green-500" /> : <span className="text-xs font-bold text-orange-500">{reste}</span>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                      
+                      <div className="mt-2 flex items-center gap-2">
+                         <input type="checkbox" checked={liv.fraisAppliques} onChange={() => toggleFrais(lIdx)} />
+                         <span className="text-xs text-gray-700">Appliquer frais ({liv.coutPrestation} F)</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
-            </div>
-        )}
+              );
+            })}
+          </div>
+
+          <div>
+             <textarea 
+               value={notes}
+               onChange={(e) => setNotes(e.target.value)}
+               placeholder="Notes générales..."
+               className="w-full p-3 border border-gray-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+               rows="2"
+             ></textarea>
+           </div>
+        </div>
+
+        {/* Footer */}
+        <div className="p-5 border-t border-gray-100 bg-white rounded-b-3xl">
+          <button
+            onClick={handleConfirm}
+            disabled={isSubmitting}
+            className={`w-full py-4 font-bold rounded-xl shadow-lg flex justify-center items-center gap-2 transition-all 
+              ${cashManquant > 0 ? 'bg-orange-600 hover:bg-orange-700 text-white shadow-orange-200' : 'bg-green-600 hover:bg-green-700 text-white shadow-green-200'}
+            `}
+          >
+            {isSubmitting ? <FiRefreshCw className="animate-spin" /> : <FiCheck />}
+            {isSubmitting ? 'Validation...' : `Valider ${cashManquant > 0 ? '(Avec Dette)' : 'Session'}`}
+          </button>
+        </div>
+
       </div>
     </div>
   );

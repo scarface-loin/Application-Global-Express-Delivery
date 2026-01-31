@@ -1,10 +1,15 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react'; // Ajout de useEffect
 import { FiPlus, FiTrash2, FiCheck, FiUser } from 'react-icons/fi';
+// Import de la nouvelle fonction fetchActiveLivreurs
+import { createDeliveryInFirebase, fetchActiveLivreurs } from './logic/CreateDeliveryPageLogic';
 
 export default function CreateDeliveryPage() {
   const [deliveryType, setDeliveryType] = useState('course');
+  
+  // Modification du formData pour stocker ID et Nom séparément
   const [formData, setFormData] = useState({
-    livreur: '',
+    livreurId: '',   // ID technique
+    livreurNom: '',  // Nom pour affichage
     // Pour Course
     quartier: '',
     numeroDestinataire: '',
@@ -15,24 +20,43 @@ export default function CreateDeliveryPage() {
     villeDestination: '',
     coutExpedition: '1000',
   });
+
   const [articles, setArticles] = useState([
     { id: 1, nom: '', quantite: '', cout: '' }
   ]);
   const [loading, setLoading] = useState(false);
+  
+  // État pour stocker la liste des livreurs venant de Firebase
+  const [livreurs, setLivreurs] = useState([]);
 
-  const livreurs = [
-    { id: 'livreur1', nom: 'Jean Mukete' },
-    { id: 'livreur2', nom: 'Marie Nkotto' },
-    { id: 'livreur3', nom: 'Paul Essomba' },
-    { id: 'livreur4', nom: 'Grace Fotso' },
-  ];
+  // --- NOUVEAU : Chargement des livreurs au montage du composant ---
+  useEffect(() => {
+    const loadLivreurs = async () => {
+      const data = await fetchActiveLivreurs();
+      setLivreurs(data);
+    };
+    loadLivreurs();
+  }, []);
+
+  // --- NOUVEAU : Gestionnaire de changement de livreur ---
+  const handleLivreurChange = (e) => {
+    const selectedId = e.target.value;
+    // On trouve le livreur complet dans la liste pour récupérer son nom
+    const selectedLivreur = livreurs.find(l => l.id === selectedId);
+    
+    setFormData({ 
+      ...formData, 
+      livreurId: selectedId,
+      livreurNom: selectedLivreur ? selectedLivreur.nom : '' 
+    });
+  };
 
   const addArticle = () => {
-    setArticles([...articles, { 
-      id: Date.now(), 
-      nom: '', 
-      quantite: '', 
-      cout: '' 
+    setArticles([...articles, {
+      id: Date.now(),
+      nom: '',
+      quantite: '',
+      cout: ''
     }]);
   };
 
@@ -43,7 +67,7 @@ export default function CreateDeliveryPage() {
   };
 
   const updateArticle = (id, field, value) => {
-    setArticles(articles.map(article => 
+    setArticles(articles.map(article =>
       article.id === id ? { ...article, [field]: value } : article
     ));
   };
@@ -68,9 +92,9 @@ export default function CreateDeliveryPage() {
   };
 
   const isFormValid = () => {
-    const hasLivreur = formData.livreur;
+    const hasLivreur = formData.livreurId; // Vérifie l'ID
     const hasValidArticles = articles.every(a => a.nom && a.quantite && a.cout);
-    
+
     if (deliveryType === 'course') {
       const hasBasicInfo = formData.quartier && formData.numeroDestinataire && formData.coutLivraison;
       return hasLivreur && hasBasicInfo && hasValidArticles;
@@ -80,53 +104,44 @@ export default function CreateDeliveryPage() {
     }
   };
 
-  const handleSubmit = (e) => {
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
+
     if (!isFormValid()) {
       alert('Veuillez remplir tous les champs obligatoires');
       return;
     }
 
     setLoading(true);
-    
-    setTimeout(() => {
-      const delivery = {
-        type: deliveryType,
-        livreur: formData.livreur,
-        articles: articles,
-        total: calculateGrandTotal(),
-        trackingNumber: `TRK-${Date.now()}`,
-        createdAt: new Date().toISOString()
-      };
 
-      if (deliveryType === 'course') {
-        delivery.quartier = formData.quartier;
-        delivery.numeroDestinataire = formData.numeroDestinataire;
-        delivery.coutLivraison = formData.coutLivraison;
-      } else {
-        delivery.nomClient = formData.nomClient;
-        delivery.contactClient = formData.contactClient;
-        delivery.villeDestination = formData.villeDestination;
-        delivery.coutExpedition = formData.coutExpedition;
+    try {
+      const result = await createDeliveryInFirebase(formData, articles, deliveryType);
+
+      if (result.success) {
+        alert(`✅ ${deliveryType === 'course' ? 'Course' : 'Expédition'} créée avec succès!\nNuméro de suivi: ${result.trackingNumber}`);
+
+        // Reset du formulaire
+        setFormData({
+          livreurId: '',
+          livreurNom: '',
+          quartier: '',
+          numeroDestinataire: '',
+          coutLivraison: '',
+          nomClient: '',
+          contactClient: '',
+          villeDestination: '',
+          coutExpedition: '1000',
+        });
+        setArticles([{ id: Date.now(), nom: '', quantite: '', cout: '' }]);
       }
-      
-      console.log('Livraison créée:', delivery);
-      alert(`✅ ${deliveryType === 'course' ? 'Course' : 'Expédition'} créée avec succès!\nNuméro de suivi: ${delivery.trackingNumber}`);
-      
-      setFormData({ 
-        livreur: '',
-        quartier: '', 
-        numeroDestinataire: '', 
-        coutLivraison: '',
-        nomClient: '',
-        contactClient: '',
-        villeDestination: '',
-        coutExpedition: '1000',
-      });
-      setArticles([{ id: Date.now(), nom: '', quantite: '', cout: '' }]);
+    } catch (error) {
+      alert("❌ Erreur: " + error.message);
+    } finally {
       setLoading(false);
-    }, 1000);
+    }
   };
+
 
   return (
     <div className="min-h-screen bg-gray-50 pb-20">
@@ -147,39 +162,50 @@ export default function CreateDeliveryPage() {
             </select>
             <div className="mt-2 px-3 py-2 bg-blue-50 rounded-lg">
               <p className="text-xs text-blue-700">
-                {deliveryType === 'course' 
-                  ? '💨 Livraison rapide en ville' 
+                {deliveryType === 'course'
+                  ? '💨 Livraison rapide en ville'
                   : '🚚 Envoi vers une destination'}
               </p>
             </div>
           </div>
 
-          {/* Choix du livreur */}
+          {/* Choix du livreur (Dynamique maintenant) */}
           <div className="bg-white rounded-xl shadow-sm p-4">
             <label className="block text-sm font-semibold text-gray-700 mb-2">
               <FiUser className="inline mr-1" />
               Livreur assigné *
             </label>
             <select
-              value={formData.livreur}
-              onChange={(e) => setFormData({...formData, livreur: e.target.value})}
+              value={formData.livreurId}
+              onChange={handleLivreurChange}
               className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none text-base font-medium"
             >
               <option value="">Sélectionner un livreur</option>
+              {livreurs.length === 0 && (
+                 <option disabled>Chargement des livreurs...</option>
+              )}
               {livreurs.map(livreur => (
                 <option key={livreur.id} value={livreur.id}>
                   {livreur.nom}
                 </option>
               ))}
             </select>
+            {/* Petit lien pour ajouter un livreur si la liste est vide */}
+            {livreurs.length === 0 && !loading && (
+               <p className="text-xs text-orange-500 mt-2">
+                 Aucun livreur actif trouvé. Veuillez en créer un d'abord.
+               </p>
+            )}
           </div>
 
-          {/* Informations selon le type */}
+          {/* Informations selon le type (Reste inchangé) */}
           <div className="bg-white rounded-xl shadow-sm p-4">
-            <h2 className="text-base font-bold text-gray-800 mb-3">
+            {/* ... Le reste du formulaire (Champs texte) reste identique ... */}
+            {/* Copie le bloc "Informations selon le type" de ton fichier original ici */}
+             <h2 className="text-base font-bold text-gray-800 mb-3">
               📍 {deliveryType === 'course' ? 'Informations de livraison' : 'Informations client'}
             </h2>
-            
+
             <div className="space-y-3">
               {deliveryType === 'course' ? (
                 <>
@@ -190,7 +216,7 @@ export default function CreateDeliveryPage() {
                     <input
                       type="text"
                       value={formData.quartier}
-                      onChange={(e) => setFormData({...formData, quartier: e.target.value})}
+                      onChange={(e) => setFormData({ ...formData, quartier: e.target.value })}
                       placeholder="Ex: Bonapriso, Bonamoussadi..."
                       className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
                     />
@@ -203,7 +229,7 @@ export default function CreateDeliveryPage() {
                     <input
                       type="tel"
                       value={formData.numeroDestinataire}
-                      onChange={(e) => setFormData({...formData, numeroDestinataire: e.target.value})}
+                      onChange={(e) => setFormData({ ...formData, numeroDestinataire: e.target.value })}
                       placeholder="+237 6XX XXX XXX"
                       className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
                     />
@@ -218,7 +244,7 @@ export default function CreateDeliveryPage() {
                       min="0"
                       step="100"
                       value={formData.coutLivraison}
-                      onChange={(e) => setFormData({...formData, coutLivraison: e.target.value})}
+                      onChange={(e) => setFormData({ ...formData, coutLivraison: e.target.value })}
                       placeholder="1000"
                       className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
                     />
@@ -233,7 +259,7 @@ export default function CreateDeliveryPage() {
                     <input
                       type="text"
                       value={formData.nomClient}
-                      onChange={(e) => setFormData({...formData, nomClient: e.target.value})}
+                      onChange={(e) => setFormData({ ...formData, nomClient: e.target.value })}
                       placeholder="Ex: Marie Dupont"
                       className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
                     />
@@ -246,7 +272,7 @@ export default function CreateDeliveryPage() {
                     <input
                       type="tel"
                       value={formData.contactClient}
-                      onChange={(e) => setFormData({...formData, contactClient: e.target.value})}
+                      onChange={(e) => setFormData({ ...formData, contactClient: e.target.value })}
                       placeholder="+237 6XX XXX XXX"
                       className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
                     />
@@ -259,7 +285,7 @@ export default function CreateDeliveryPage() {
                     <input
                       type="text"
                       value={formData.villeDestination}
-                      onChange={(e) => setFormData({...formData, villeDestination: e.target.value})}
+                      onChange={(e) => setFormData({ ...formData, villeDestination: e.target.value })}
                       placeholder="Ex: Yaoundé, Bafoussam..."
                       className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
                     />
@@ -274,7 +300,7 @@ export default function CreateDeliveryPage() {
                       min="0"
                       step="100"
                       value={formData.coutExpedition}
-                      onChange={(e) => setFormData({...formData, coutExpedition: e.target.value})}
+                      onChange={(e) => setFormData({ ...formData, coutExpedition: e.target.value })}
                       placeholder="1000"
                       className="w-full px-4 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
                     />
@@ -284,7 +310,7 @@ export default function CreateDeliveryPage() {
             </div>
           </div>
 
-          {/* Articles */}
+          {/* Articles (Reste inchangé) */}
           <div className="bg-white rounded-xl shadow-sm p-4">
             <div className="flex justify-between items-center mb-3">
               <h2 className="text-base font-bold text-gray-800">🛍️ Articles ({articles.length})</h2>
@@ -371,7 +397,7 @@ export default function CreateDeliveryPage() {
               ))}
             </div>
 
-            {/* Récapitulatif */}
+            {/* Récapitulatif (Reste inchangé) */}
             <div className="mt-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-4 border-2 border-blue-200">
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between">
@@ -408,7 +434,7 @@ export default function CreateDeliveryPage() {
           {/* Aide */}
           <div className="bg-blue-50 rounded-xl p-3 border border-blue-200">
             <p className="text-xs text-blue-800">
-              <span className="font-bold">💡 Astuce:</span> Tous les champs marqués (*) sont obligatoires. 
+              <span className="font-bold">💡 Astuce:</span> Tous les champs marqués (*) sont obligatoires.
               Le total inclut les frais de {deliveryType === 'course' ? 'livraison' : 'expédition'}.
             </p>
           </div>
@@ -420,11 +446,10 @@ export default function CreateDeliveryPage() {
             <button
               onClick={handleSubmit}
               disabled={loading || !isFormValid()}
-              className={`w-full py-4 rounded-xl font-bold text-base transition-all flex items-center justify-center gap-2 ${
-                loading || !isFormValid()
+              className={`w-full py-4 rounded-xl font-bold text-base transition-all flex items-center justify-center gap-2 ${loading || !isFormValid()
                   ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                   : 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:from-blue-700 hover:to-indigo-700 shadow-lg active:scale-[0.98]'
-              }`}
+                }`}
             >
               {loading ? (
                 <>
@@ -440,14 +465,12 @@ export default function CreateDeliveryPage() {
             </button>
 
             <div className="mt-2 text-center">
-              <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs ${
-                isFormValid() 
-                  ? 'bg-green-100 text-green-700' 
+              <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs ${isFormValid()
+                  ? 'bg-green-100 text-green-700'
                   : 'bg-yellow-100 text-yellow-700'
-              }`}>
-                <div className={`h-2 w-2 rounded-full ${
-                  isFormValid() ? 'bg-green-500' : 'bg-yellow-500'
-                } animate-pulse`}></div>
+                }`}>
+                <div className={`h-2 w-2 rounded-full ${isFormValid() ? 'bg-green-500' : 'bg-yellow-500'
+                  } animate-pulse`}></div>
                 {isFormValid() ? 'Prêt à envoyer' : 'Complétez tous les champs (*)'}
               </div>
             </div>
