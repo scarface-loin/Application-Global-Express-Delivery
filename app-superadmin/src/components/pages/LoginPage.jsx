@@ -53,8 +53,7 @@ export const LoginPage = ({ onLogin }) => {
           <div className="inline-flex items-center justify-center w-16 h-16 bg-blue-100 rounded-full mb-4">
             <FiTruck size={32} className="text-blue-600" />
           </div>
-          <h1 className="text-3xl font-bold text-gray-900">Admin Livraisons</h1>
-          <p className="text-gray-600 mt-2">Mode Test (Backend désactivé)</p>
+          <h1 className="text-3xl font-bold text-gray-900">Super-Admin Livraisons</h1>
         </div>
 
         {error && <Alert type="error" message={error} onClose={() => setError('')} />}
