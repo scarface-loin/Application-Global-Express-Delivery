@@ -181,27 +181,30 @@ export const Dashboard = () => {
             </div>
           )}
         </Card>
+       
+       {/* 2. MISE A JOUR DES BOUTONS D'ACTION */}
         <Card title="Actions Rapides">
           <div className="space-y-2">
             <button
-              onClick={() => window.location.hash = '#create-delivery'}
+              onClick={() => setCurrentPage('create-delivery')} 
               className="w-full flex items-center gap-3 text-left px-4 py-3 rounded-lg bg-blue-50 hover:bg-blue-100 transition-colors text-blue-700"
             >
               <FiPlus /> Créer une nouvelle livraison
             </button>
             <button
-              onClick={() => window.location.hash = '#create-delivery-man'} // Lien corrigé pour la création
+              onClick={() => setCurrentPage('CreateLivreurForm')} 
               className="w-full flex items-center gap-3 text-left px-4 py-3 rounded-lg bg-green-50 hover:bg-green-100 transition-colors text-green-700"
             >
               <FiUsers /> Ajouter un livreur
             </button>
             <button
-              onClick={() => window.location.hash = '#deliveries'} // Lien vers la liste des livraisons
+              onClick={() => setCurrentPage('deliveries')} 
               className="w-full flex items-center gap-3 text-left px-4 py-3 rounded-lg bg-purple-50 hover:bg-purple-100 transition-colors text-purple-700"
             >
               <FiSearch /> Suivre les colis
             </button>
             <button
+              onClick={() => setCurrentPage('daily-summary')} 
               className="w-full flex items-center gap-3 text-left px-4 py-3 rounded-lg bg-yellow-50 hover:bg-yellow-100 transition-colors text-yellow-700"
             >
               <FiFilter /> Voir les rapports

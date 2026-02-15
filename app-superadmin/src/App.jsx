@@ -19,7 +19,7 @@ import GarageValidationPage from './components/pages/GarageValidationPage';
 import HistoryPage from './components/pages/HistoryPage';
 import DailySummaryPage from './components/pages/DailySummaryPage';
 import DeliveryDriverSalaryPage from './components/pages/DeliveryDriverSalaryPage';
-import DeliveryMenListPage from './components/pages/DeliveryMenListPage'; // <--- 1. IMPORT AJOUTÉ
+import DeliveryMenListPage from './components/pages/DeliveryMenListPage';
 
 import AdminNotificationBadge from './components/common/AdminNotificationBadge';
 
@@ -50,8 +50,10 @@ const AppContent = () => {
   const renderPage = () => {
     switch (currentPage) {
       case 'dashboard': 
-        return <Dashboard />;
-      case 'deliverymen': // <--- 2. CASE AJOUTÉ
+        // --- MODIFICATION ICI : On passe la fonction pour que les boutons fonctionnent ---
+        return <Dashboard setCurrentPage={setCurrentPage} />;
+        
+      case 'deliverymen': 
         return <DeliveryMenListPage />;
       case 'deliveries': 
         return <DeliveriesPage onNavigate={handleNavigate} />;
@@ -80,13 +82,13 @@ const AppContent = () => {
         return <AdminAssignDeliveryPage deliveryId={selectedDelivery} onBack={handleBack} onSuccess={() => setCurrentPage('deliveries')} />;
         
       default: 
-        return <Dashboard />;
+        return <Dashboard setCurrentPage={setCurrentPage} />;
     }
   };
 
   const pageTitles = {
     'dashboard': 'Tableau de bord',
-    'deliverymen': 'Gestion des Livreurs', // <--- 3. TITRE AJOUTÉ
+    'deliverymen': 'Gestion des Livreurs',
     'GarageValidationPage': 'Suivi Garage & Entretien',
     'deliveries': 'Course du jour',
     'admin-assign-delivery': 'Attribution Livraisons',

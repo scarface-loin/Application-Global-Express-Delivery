@@ -11,7 +11,10 @@ import {
   increment 
 } from 'firebase/firestore';
 
-// ... (Garder fetchLivreursAValider inchangé) ...
+/**
+ * CHARGEMENT DES DONNÉES
+ * MODIFICATION : Force l'affichage en "Livré" par défaut
+ */
 export const fetchLivreursAValider = async () => {
   try {
     const qInterne = query(collection(db, "livraisons"), where("dateValidation", "==", null), where("livreurId", "!=", null));
@@ -22,6 +25,7 @@ export const fetchLivreursAValider = async () => {
     const processDoc = (docSnap, origine) => {
       const data = docSnap.data();
       const lid = data.livreurId;
+      
       if (!livreursMap[lid]) {
         livreursMap[lid] = {
           id: lid,
@@ -33,28 +37,36 @@ export const fetchLivreursAValider = async () => {
         };
       }
       
+      // --- LOGIQUE MODIFIÉE POUR L'INTERFACE ---
+      // On force la quantité livrée au maximum (comme si succès)
+      // On met la quantité retournée à 0
       const articles = (data.articles || []).map(art => ({
         ...art,
-        quantiteLivree: data.statut === 'livre' ? art.quantiteCommandee : 0,
-        quantiteRetournee: data.statut === 'non_livre' ? art.quantiteCommandee : 0,
-        quantitePerdue: 0,
+        quantiteLivree: parseInt(art.quantiteCommandee || 0), // Force Vert au max
+        quantiteRetournee: 0,                                 // Force Bleu à 0
+        quantitePerdue: 0,                                    // Force Rouge à 0
         coutUnitaire: parseFloat(art.coutUnitaire || 0)
       }));
 
-      const montant = data.totalGeneral || 0;
-      if (data.statut === 'livre') {
-        livreursMap[lid].totalCollecte += montant;
-      }
+      // Calcul du montant théorique de CETTE livraison (Articles + Livraison)
+      // On recalcule car on vient de forcer le statut "Livré"
+      const totalArticles = articles.reduce((sum, art) => sum + (art.quantiteLivree * art.coutUnitaire), 0);
+      const coutPrestation = parseFloat(data.coutPrestation || 0);
+      const montantTotalEstime = totalArticles + coutPrestation;
+
+      // On ajoute ce montant au total que le livreur doit ramener (Total à encaisser)
+      livreursMap[lid].totalCollecte += montantTotalEstime;
       
       livreursMap[lid].nbLivraisons++;
       livreursMap[lid].livraisons.push({
         id: docSnap.id,
         origine: origine,
         trackingNumber: data.numeroSuivi,
-        statutOriginal: data.statut,
-        coutPrestation: parseFloat(data.coutPrestation || 0),
+        statutOriginal: data.statut, // On garde l'info originale au cas où
+        coutPrestation: coutPrestation,
         quartier: data.infosLivraison?.quartier || 'N/A',
-        articles: articles, 
+        articles: articles, // Contient nos valeurs forcées "Livrées"
+        totalCalcule: montantTotalEstime
       });
     };
 
@@ -76,10 +88,10 @@ export const validerSessionLivreur = async ({
   livreurId, 
   livreurNom, 
   livraisons, 
-  montantTheorique, // Ce qu'il devait avoir
-  montantRecu,      // Ce qu'il a donné (Cash)
-  montantPerduArticles, // Valeur des marchandises perdues
-  garageRequest,    // Objet { actif: true, motif: "...", montantEstime: 10000 }
+  montantTheorique, 
+  montantRecu,      
+  montantPerduArticles,
+  garageRequest,    
   notes 
 }) => {
   try {
@@ -92,11 +104,19 @@ export const validerSessionLivreur = async ({
       const collectionName = liv.origine === 'partenaire' ? 'livraison_partenaire' : 'livraisons';
       const ref = doc(db, collectionName, liv.id);
       
+      // Détermination du statut final basé sur les quantités validées
+      const isTotalementLivre = liv.articles.every(a => a.quantiteLivree > 0 && a.quantiteRetournee === 0);
+      const isTotalementRetour = liv.articles.every(a => a.quantiteLivree === 0 && a.quantiteRetournee > 0);
+      
+      let statutFinal = 'partiel';
+      if (isTotalementLivre) statutFinal = 'livre';
+      else if (isTotalementRetour) statutFinal = 'non_livre';
+
       batchPromises.push(
         updateDoc(ref, {
           dateValidation: now,
           adminIdValidation: adminId,
-          statut: 'valide',
+          statut: statutFinal, // Statut mis à jour selon la validation admin
           articles: liv.articles,
           totalFinalEncaisse: liv.totalCalcule, 
           updatedAt: serverTimestamp()
@@ -105,10 +125,7 @@ export const validerSessionLivreur = async ({
     });
 
     // 2. Calcul des Dettes
-    // Cash manquant = Ce qu'il devait avoir - Ce qu'il a donné
     const cashManquant = Math.max(0, montantTheorique - montantRecu);
-    
-    // Total à ajouter à la dette = Cash Manquant + Marchandise Perdue
     const totalDetteAjoutee = cashManquant + montantPerduArticles;
 
     // 3. Enregistrement du versement global
@@ -118,7 +135,7 @@ export const validerSessionLivreur = async ({
         livreurNom,
         montantAttendu: parseFloat(montantTheorique),
         montantVerse: parseFloat(montantRecu),
-        montantManquant: parseFloat(cashManquant), // Cash perdu/gardé
+        montantManquant: parseFloat(cashManquant),
         montantPerduMarchandise: parseFloat(montantPerduArticles),
         date: now,
         nbCourses: livraisons.length,
@@ -129,7 +146,7 @@ export const validerSessionLivreur = async ({
       })
     );
 
-    // 4. Gestion de la Demande Garage (Si activée)
+    // 4. Gestion de la Demande Garage
     if (garageRequest && garageRequest.actif) {
       batchPromises.push(
         addDoc(collection(db, "demandes_garage"), {
@@ -137,29 +154,26 @@ export const validerSessionLivreur = async ({
           livreurNom,
           motif: garageRequest.motif,
           description: garageRequest.description || "Demande créée lors de la validation",
-          montantManquant: parseFloat(garageRequest.montantEstime || 0), // Souvent égal au cash manquant
+          montantManquant: parseFloat(garageRequest.montantEstime || 0),
           urgence: 'normale',
-          statut: 'en_attente', // Pour validation Super Admin
+          statut: 'en_attente',
           dateCreation: now,
           creePar: adminId
         })
       );
       
-      // Notification Admin (optionnel, selon ta structure)
       batchPromises.push(
          addDoc(collection(db, "notifications_admin"), {
            type: "demande_garage",
            message: `Nouvelle demande garage pour ${livreurNom}`,
            lu: false,
            createdAt: serverTimestamp(),
-           demandeId: null // Sera mis à jour si on faisait autrement, mais ici c'est ok
+           demandeId: null
          })
       );
     }
 
     // 5. Mise à jour de la dette du livreur
-    // On ajoute TOUT en dette. Si le garage est validé plus tard par le Super Admin, 
-    // la fonction 'validerDemandeGarage' viendra REDUIRE cette dette.
     if (totalDetteAjoutee > 0) {
       const livreurRef = doc(db, "livreurs", livreurId);
       batchPromises.push(

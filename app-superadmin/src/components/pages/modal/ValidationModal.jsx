@@ -10,24 +10,26 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Nouveaux états pour gérer le Cash et le Garage
-  const [cashRecu, setCashRecu] = useState(0); // Ce que l'admin tape
+  const [cashRecu, setCashRecu] = useState(0); 
   const [showGarage, setShowGarage] = useState(false);
   const [garageData, setGarageData] = useState({
     motif: '',
     montantEstime: 0
   });
 
-  // Initialisation des données au montage
+  // --- MODIFICATION ICI : Initialisation des données au montage ---
   useEffect(() => {
     const initData = livreur.livraisons.map(liv => {
-      const isLivreBase = liv.statutOriginal === 'livre';
+      // On force tout le monde en "Livré" par défaut pour faciliter la tâche
       const newArticles = liv.articles.map(art => ({
         ...art,
-        quantiteLivree: isLivreBase ? art.quantiteCommandee : 0,
-        quantiteRetournee: isLivreBase ? 0 : art.quantiteCommandee,
+        quantiteLivree: art.quantiteCommandee, // Tout est livré par défaut
+        quantiteRetournee: 0,                  // Rien n'est retourné par défaut
         quantitePerdue: 0
       }));
-      return { ...liv, articles: newArticles, fraisAppliques: isLivreBase };
+      
+      // On applique les frais par défaut car on suppose que c'est livré
+      return { ...liv, articles: newArticles, fraisAppliques: true };
     });
     setLocalLivraisons(initData);
   }, [livreur]);
@@ -55,8 +57,7 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
     return { theorique, perduArticles };
   }, [localLivraisons]);
 
-  // Met à jour le cash reçu par défaut quand le théorique change (pour faciliter la saisie)
-  // Sauf si l'utilisateur a déjà commencé à modifier manuellement (optionnel, ici on simplifie)
+  // Met à jour le cash reçu par défaut quand le théorique change
   useEffect(() => {
     setCashRecu(totals.theorique);
   }, [totals.theorique]);
@@ -70,12 +71,14 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
     const article = newLivraisons[livraisonIndex].articles[articleIndex];
     const currentTotalAssigned = article.quantiteLivree + article.quantiteRetournee + article.quantitePerdue;
     
+    // Logique pour augmenter/diminuer
     if (delta > 0) {
       if (currentTotalAssigned < article.quantiteCommandee) article[type] += 1;
     } else {
       if (article[type] > 0) article[type] -= 1;
     }
 
+    // Gestion intelligente des frais : si au moins 1 article est livré, on active les frais
     const hasDeliveredItem = newLivraisons[livraisonIndex].articles.some(a => a.quantiteLivree > 0);
     newLivraisons[livraisonIndex].fraisAppliques = hasDeliveredItem;
 
@@ -98,7 +101,7 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
     );
 
     if (!isAllAssigned) {
-      if (!window.confirm("Certains articles n'ont pas été totalement assignés. Continuer ?")) return;
+      if (!window.confirm("Certains articles n'ont pas été totalement assignés (Reste > 0). Continuer ?")) return;
     }
 
     // Vérification Garage
@@ -115,7 +118,6 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
         montantPerduArticles: totals.perduArticles,
         livraisons: localLivraisons,
         notes: notes,
-        // Données garage
         garageRequest: showGarage ? {
           actif: true,
           motif: garageData.motif,
@@ -140,7 +142,7 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
         <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-3xl">
           <div>
             <h2 className="text-xl font-bold text-gray-900">Validation: {livreur.nom}</h2>
-            <p className="text-sm text-gray-500">Vérifiez les articles et encaissez l'argent</p>
+            <p className="text-sm text-gray-500">Par défaut : Tout est considéré comme <b>LIVRÉ</b></p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full">
             <FiX size={24} className="text-gray-500" />

@@ -8,13 +8,18 @@ export default function ProfilePage({ livreurId, onLogout, onPasswordChanged, fo
   const [status, setStatus] = useState({ loading: false, error: '', success: '' });
 
   useEffect(() => {
-    if (livreurId) {
-      fetchLivreurInfo(livreurId).then(setLivreur).catch(err => {
-        console.error("Erreur lors du chargement des infos du livreur:", err);
-        setStatus(s => ({ ...s, error: "Impossible de charger les informations du profil." }));
+  if (livreurId) {
+    fetchLivreurInfo(livreurId)
+      .then(setLivreur)
+      .catch(err => {
+        if (err.message === "LIVREUR_NOT_FOUND") {
+          onLogout(); // Redirection si compte supprimé
+        } else {
+          setStatus(s => ({ ...s, error: "Erreur de chargement du profil." }));
+        }
       });
-    }
-  }, [livreurId]);
+  }
+}, [livreurId, onLogout]);
 
   const handleChangePassword = async (e) => {
     e.preventDefault();
