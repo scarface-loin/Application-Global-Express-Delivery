@@ -3,62 +3,56 @@ import { collection, getDocs, query, orderBy, deleteDoc, doc } from 'firebase/fi
 
 /**
  * Récupère les livraisons actives (non validées/archivées)
- * @returns {Promise<Array>} Liste formatée des livraisons
+ * @returns {Promise<Array>} Liste formatée des livraisons  
  */
 export const fetchActiveDeliveries = async () => {
   try {
-    // 1. On récupère les livraisons triées par date de création (plus récentes en premier)
-    const q = query(collection(db, "livraisons"), orderBy("createdAt", "desc"));
-    const querySnapshot = await getDocs(q);
+    // 1. Récupérer les deux collections
+    // Note : orderBy nécessite parfois un index composite. 
+    // Si ça plante, enlève orderBy temporairement ou crée l'index dans Firebase Console.
+    const qInterne = query(collection(db, "livraisons"), orderBy("dateCreation", "desc"));
+    const qPartenaire = query(collection(db, "livraison_partenaire"), orderBy("dateCreation", "desc"));
+
+    const [snapInterne, snapPartenaire] = await Promise.all([
+      getDocs(qInterne),
+      getDocs(qPartenaire)
+    ]);
     
     const deliveries = [];
 
-    querySnapshot.forEach((doc) => {
+    const processData = (doc, source) => {
       const data = doc.data();
+      // On ignore si validé (archivé)
+      if (data.dateValidation || data.statut === 'livre' || data.statut === 'facture_validee') return; 
 
-      // 2. FILTRE : On ne garde que celles qui ne sont PAS ENCORE VALIDÉES
-      // Si dateValidation existe et n'est pas null, c'est que c'est une vieille histoire (archivée)
-      if (data.dateValidation) return; 
-
-      // 3. MAPPING : On aplatit les données pour l'affichage facile dans le tableau
-      // On gère la différence entre Course (Quartier) et Expédition (Ville)
-      const quartierOuVille = data.type === 'course' 
-        ? (data.infosLivraison?.quartier || 'Quartier inconnu')
-        : (data.infosLivraison?.villeDestination || 'Destination inconnue');
-
-      const contact = data.type === 'course'
-        ? (data.infosLivraison?.numeroDestinataire || '')
-        : (data.infosLivraison?.contactClient || '');
+      const quartierOuVille = data.infosLivraison?.quartier || data.infosLivraison?.villeDestination || 'Destination inconnue';
+      const contact = data.infosLivraison?.numeroDestinataire || data.infosLivraison?.contactClient || '';
 
       deliveries.push({
         id: doc.id,
-        // --- Infos principales ---
+        source: source, // Pour info
         trackingNumber: data.numeroSuivi,
         type: data.type,
         status: data.statut,
         createdAt: data.dateCreation,
-        
-        // --- Infos Lieux/Contacts (Aplaties) ---
         quartier: quartierOuVille,
         numeroDestinataire: contact,
-        
-        // --- Infos Financières ---
-        coutLivraison: data.coutPrestation, // Ce que gagne l'agence
-        total: data.totalGeneral,           // Ce que le livreur encaisse
-        
-        // --- Infos Contenu ---
+        coutLivraison: data.coutPrestation,
+        total: data.totalGeneral,
         articles: data.articles || [],
-        
-        // --- Infos Livreur ---
         deliveryManName: data.livreurNom || null,
         livreurId: data.livreurId || null
       });
-    });
+    };
 
-    return deliveries;
+    snapInterne.forEach(d => processData(d, 'interne'));
+    snapPartenaire.forEach(d => processData(d, 'partenaire'));
+
+    // Tri manuel final (JavaScript) pour être sûr de l'ordre après fusion
+    return deliveries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   } catch (error) {
-    console.error("Erreur lors de la récupération des livraisons :", error);
+    console.error("Erreur récup livraisons :", error);
     throw new Error("Impossible de charger les livraisons.");
   }
 };

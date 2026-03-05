@@ -23,6 +23,8 @@ export const Dashboard = () => {
     pending: 0,
     inProgress: 0,
     delivered: 0,
+    partial: 0,
+    failed: 0,
     deliveryMen: 0,
     totalAmount: 0,
   });
@@ -73,10 +75,22 @@ export const Dashboard = () => {
       color: 'bg-purple-500',
     },
     {
-      title: 'Terminées',
+      title: 'Livrées',
       value: stats.delivered,
       icon: <FiCheckCircle size={32} />,
       color: 'bg-green-500',
+    },
+    {
+      title: 'Partielles',
+      value: stats.partial,
+      icon: <FiPackage size={32} />,
+      color: 'bg-orange-400',
+    },
+    {
+      title: 'Échecs',
+      value: stats.failed,
+      icon: <FiTruck size={32} />,
+      color: 'bg-red-500',
     },
     {
       title: 'Livreurs Actifs',
@@ -85,7 +99,7 @@ export const Dashboard = () => {
       color: 'bg-indigo-500',
     },
     {
-      title: 'Chiffre d\'Affaires',
+      title: 'Frais de Livraison',
       value: `${(stats.totalAmount || 0).toLocaleString()} FCFA`,
       icon: <FiDollarSign size={32} />,
       color: 'bg-emerald-500',

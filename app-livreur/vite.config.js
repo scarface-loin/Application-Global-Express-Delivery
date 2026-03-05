@@ -10,7 +10,7 @@ export default defineConfig({
       includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
       manifest: {
         name: 'Nom de votre application',
-        short_name: 'NomCourt',
+        short_name: 'Global Livreur',
         description: 'Description de votre app',
         theme_color: '#ffffff',
         background_color: '#ffffff',

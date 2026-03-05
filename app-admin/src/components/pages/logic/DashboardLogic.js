@@ -4,8 +4,8 @@ import { db } from '../../../services/firebase'; // Adaptez le chemin
 import { collection, query, where, getDocs, orderBy, limit } from 'firebase/firestore';
 
 /**
- * Récupère les données agrégées et les livraisons récentes pour le tableau de bord.
- */
+ * Récupère les  données agrégées et les livraisons récentes pour le tableau de bord.
+ */ 
 export const fetchDashboardData = async () => {
   try {
     // 1. Récupérer les livreurs actifs
@@ -30,7 +30,8 @@ export const fetchDashboardData = async () => {
 
     const stats = allDeliveries.reduce((acc, delivery) => {
       acc.total += 1;
-      acc.totalAmount += delivery.totalGeneral || 0;
+      // CA = somme des frais de livraison (coutPrestation), pas des totaux articles
+      acc.totalAmount += delivery.coutPrestation || 0;
 
       switch (delivery.statut) {
         case 'en_attente':
@@ -41,8 +42,16 @@ export const fetchDashboardData = async () => {
           acc.inProgress += 1;
           break;
         case 'livre':
-        case 'valide': // Le statut 'valide' est aussi une forme de "livré" du point de vue admin
+        case 'valide':
           acc.delivered += 1;
+          break;
+        case 'partiel':
+          acc.partial += 1;
+          break;
+        case 'non_livre':
+        case 'annule':
+        case 'echec':
+          acc.failed += 1;
           break;
         default:
           break;
@@ -53,6 +62,8 @@ export const fetchDashboardData = async () => {
       pending: 0,
       inProgress: 0,
       delivered: 0,
+      partial: 0,
+      failed: 0,
       totalAmount: 0,
     });
 

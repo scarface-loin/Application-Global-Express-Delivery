@@ -12,7 +12,7 @@ import {
 } from 'firebase/firestore';
 
 /**
- * Récupère toutes les demandes de garage (en attente et historique récent)
+ * Récupère toutes les demandes de garage (en attente et historique récent) 
  */
 export const fetchDemandesGarage = async () => {
   try {

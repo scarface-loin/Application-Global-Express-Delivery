@@ -1,5 +1,3 @@
-// src/components/pages/Dashboard.jsx
-
 import React, { useState, useEffect } from 'react';
 import {
   FiPackage,
@@ -16,22 +14,25 @@ import Card from './Card';
 import Badge from './Badge';
 import DeliveryLoader from './DeliveryLoader';
 import motoGif from '../../assets/moto-livraison.gif';
-import { fetchDashboardData } from '../pages/logic/DashboardLogic'; 
+// --- MODIFICATION: Importation de la logique de données ---
+import { fetchDashboardData } from '../pages/logic/DashboardLogic'; // <-- Adaptez ce chemin selon votre structure !
 
-// 1. AJOUT DE LA PROP setCurrentPage ICI
-export const Dashboard = ({ setCurrentPage }) => {
+export const Dashboard = () => {
   const [stats, setStats] = useState({
     total: 0,
     pending: 0,
     inProgress: 0,
     delivered: 0,
+    partial: 0,
+    failed: 0,
     deliveryMen: 0,
     totalAmount: 0,
   });
   const [recentDeliveries, setRecentDeliveries] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const [error, setError] = useState(null); // Ajout d'un état pour la gestion des erreurs
 
+  // --- MODIFICATION: Remplacement du mock par un appel réel à Firestore via la logique ---
   useEffect(() => {
     const loadDashboardData = async () => {
       try {
@@ -51,25 +52,81 @@ export const Dashboard = ({ setCurrentPage }) => {
     loadDashboardData();
   }, []);
 
-  // ... (Le code des statCards et getStatusInfo reste identique) ...
+  // Le reste du composant utilise les états `stats` et `recentDeliveries` qui sont maintenant
+  // remplis avec les données réelles de Firestore. La structure JSX n'a pas besoin de changer.
+
   const statCards = [
-    { title: 'Total Livraisons', value: stats.total, icon: <FiPackage size={32} />, color: 'bg-blue-500' },
-    { title: 'En Attente', value: stats.pending, icon: <FiClock size={32} />, color: 'bg-yellow-500' },
-    { title: 'En Cours', value: stats.inProgress, icon: <FiTruck size={32} />, color: 'bg-purple-500' },
-    { title: 'Terminées', value: stats.delivered, icon: <FiCheckCircle size={32} />, color: 'bg-green-500' },
-    { title: 'Livreurs Actifs', value: stats.deliveryMen, icon: <FiUsers size={32} />, color: 'bg-indigo-500' },
-    { title: 'Chiffre d\'Affaires', value: `${(stats.totalAmount || 0).toLocaleString()} FCFA`, icon: <FiDollarSign size={32} />, color: 'bg-emerald-500' },
+    {
+      title: 'Total Livraisons',
+      value: stats.total,
+      icon: <FiPackage size={32} />,
+      color: 'bg-blue-500',
+    },
+    {
+      title: 'En Attente',
+      value: stats.pending,
+      icon: <FiClock size={32} />,
+      color: 'bg-yellow-500',
+    },
+    {
+      title: 'En Cours',
+      value: stats.inProgress,
+      icon: <FiTruck size={32} />,
+      color: 'bg-purple-500',
+    },
+    {
+      title: 'Livrées',
+      value: stats.delivered,
+      icon: <FiCheckCircle size={32} />,
+      color: 'bg-green-500',
+    },
+    {
+      title: 'Partielles',
+      value: stats.partial,
+      icon: <FiPackage size={32} />,
+      color: 'bg-orange-400',
+    },
+    {
+      title: 'Échecs',
+      value: stats.failed,
+      icon: <FiTruck size={32} />,
+      color: 'bg-red-500',
+    },
+    {
+      title: 'Livreurs Actifs',
+      value: stats.deliveryMen,
+      icon: <FiUsers size={32} />,
+      color: 'bg-indigo-500',
+    },
+    {
+      title: 'Frais de Livraison',
+      value: `${(stats.totalAmount || 0).toLocaleString()} FCFA`,
+      icon: <FiDollarSign size={32} />,
+      color: 'bg-emerald-500',
+    },
   ];
 
   const getStatusInfo = (status) => {
     switch (status) {
-      case 'delivered': return { type: 'success', text: 'Livrée' };
-      case 'in_progress': return { type: 'info', text: 'En cours' };
-      case 'pending': default: return { type: 'warning', text: 'En attente' };
+      case 'delivered':
+        return { type: 'success', text: 'Livrée' };
+      case 'in_progress':
+        return { type: 'info', text: 'En cours' };
+      case 'pending':
+      default:
+        return { type: 'warning', text: 'En attente' };
     }
   };
 
-  if (loading) return <DeliveryLoader gifUrl={motoGif} onLoadingComplete={() => setLoading(false)} />;
+
+  if (loading) {
+    return (
+      <DeliveryLoader
+        gifUrl={motoGif}
+        onLoadingComplete={() => setLoading(false)}
+      />
+    );
+  }
   
   if (error) {
     return (
@@ -107,8 +164,7 @@ export const Dashboard = ({ setCurrentPage }) => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-8">
         <Card title="Livraisons Récentes">
-           {/* ... (Code d'affichage des livraisons récentes inchangé) ... */}
-           {recentDeliveries.length === 0 ? (
+          {recentDeliveries.length === 0 ? (
             <p className="text-gray-600 text-center py-8">Aucune livraison récente</p>
           ) : (
             <div className="space-y-3">
@@ -119,13 +175,19 @@ export const Dashboard = ({ setCurrentPage }) => {
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-gray-800">#{delivery._id?.slice(-6)}</span>
-                        <Badge type={statusInfo.type}>{statusInfo.text}</Badge>
+                        <Badge type={statusInfo.type}>
+                          {statusInfo.text}
+                        </Badge>
                       </div>
-                      <p className="text-sm text-gray-600">{delivery.clientInfo?.name} • {delivery.deliveryType === 'local' ? 'Locale' : 'Transfert'}</p>
+                      <p className="text-sm text-gray-600">
+                        {delivery.clientInfo?.name} • {delivery.deliveryType === 'local' ? 'Locale' : 'Transfert'}
+                      </p>
                     </div>
                     <div className="text-right">
                       <p className="text-sm font-medium">{delivery.totalAmount?.toLocaleString()} FCFA</p>
-                      <p className="text-xs text-gray-500">{new Date(delivery.createdAt).toLocaleDateString('fr-FR')}</p>
+                      <p className="text-xs text-gray-500">
+                        {new Date(delivery.createdAt).toLocaleDateString('fr-FR')}
+                      </p>
                     </div>
                   </div>
                 )
@@ -133,8 +195,8 @@ export const Dashboard = ({ setCurrentPage }) => {
             </div>
           )}
         </Card>
-
-        {/* 2. MISE A JOUR DES BOUTONS D'ACTION */}
+       
+       {/* 2. MISE A JOUR DES BOUTONS D'ACTION */}
         <Card title="Actions Rapides">
           <div className="space-y-2">
             <button

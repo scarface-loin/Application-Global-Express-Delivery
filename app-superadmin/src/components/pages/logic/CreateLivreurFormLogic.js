@@ -10,7 +10,7 @@ const uploadFileToStorage = async (file, folderName, fileName) => {
   
   // Création de la référence : livreurs/ID_LIVREUR/documents/nom_fichier
   const storageRef = ref(storage, `${folderName}/${fileName}`);
-  
+
   // Upload
   const snapshot = await uploadBytes(storageRef, file);
   

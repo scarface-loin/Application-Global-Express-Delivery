@@ -106,6 +106,9 @@ export const calculateSituationDuJour = (livraisons) => {
   let valeurColisEnMain = 0; 
 
   livraisons.forEach(l => {
+    // Expéditions: montant à récupérer = 0
+    if (l.type === 'expedition') return;
+
     responsabiliteDuJour += l.total;
 
     if (l.statut === 'livre') {
@@ -121,6 +124,20 @@ export const calculateSituationDuJour = (livraisons) => {
     valeurColisEnMain,
     nbCourses: livraisons.length
   };
+};
+
+// --- UTILITAIRE: Calculer le cycle de 25 jours ---
+export const calculerCycle25Jours = (dateDebut) => {
+  const now = new Date();
+  const debut = new Date(dateDebut);
+  const diffMs = now - debut;
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const jourDansCycle = (diffDays % 25) + 1; // 1 à 25
+  const numeroCycle = Math.floor(diffDays / 25) + 1;
+  const joursRestants = 25 - jourDansCycle + 1;
+  const pourcentage = Math.round((jourDansCycle / 25) * 100);
+  
+  return { jourDansCycle, numeroCycle, joursRestants, pourcentage };
 };
 
 export const updateLivraisonStatut = async (livraisonId, origine, nouveauStatut, motif = null) => {
@@ -212,59 +229,113 @@ export const fetchHistoriqueLivraisons = async (livreurId) => {
 
     const pushToHistory = (docSnap, origine) => {
        const data = docSnap.data();
-       
-       // Calculer les détails de validation (LOGIQUE D'ORIGINE)
-       const articlesLivres = (data.articles || []).filter(a => (a.quantiteLivree || 0) > 0);
-       const articlesNonLivres = (data.articles || []).filter(a => {
-         const qteCommande = parseInt(a.quantiteCommandee) || 0;
-         const qteLivree = parseInt(a.quantiteLivree) || 0;
-         return qteCommande > qteLivree;
-       });
-       
-       const montantLivre = articlesLivres.reduce((sum, art) => {
-         return sum + ((art.quantiteLivree || 0) * (art.coutUnitaire || 0));
-       }, 0);
-       
-       const montantNonLivre = articlesNonLivres.reduce((sum, art) => {
+       const isExpedition = data.type === 'expedition';
+
+       // --- STATUT PAR ARTICLE: livré | retourné | perdu ---
+       const articles = (data.articles || []).map(art => {
          const qteCommande = parseInt(art.quantiteCommandee) || 0;
          const qteLivree = parseInt(art.quantiteLivree) || 0;
-         const qteNonLivree = qteCommande - qteLivree;
+         const qteRetournee = parseInt(art.quantiteRetournee) || 0;
+         const qtePerdue = parseInt(art.quantitePerdue) || 0;
+
+         let statutArt;
+         if (qtePerdue > 0 && qteLivree === 0 && qteRetournee === 0) {
+           statutArt = 'perdu'; // Tout perdu
+         } else if (qtePerdue > 0 && qteLivree > 0) {
+           statutArt = 'perdu_partiel'; // Livré partiellement + perte
+         } else if (qteLivree >= qteCommande) {
+           statutArt = 'livre';
+         } else if (qteLivree > 0) {
+           statutArt = 'partiel';
+         } else if (qteRetournee > 0) {
+           statutArt = 'retourne';
+         } else {
+           // Fallback : si rien n'est renseigné, on se base sur l'ancien champ statut
+           statutArt = art.statut || 'retourne';
+         }
+
+         return { ...art, statutCalcule: statutArt, qteCommande, qteLivree, qteRetournee, qtePerdue };
+       });
+
+       const articlesLivres = articles.filter(a => a.statutCalcule === 'livre' || a.statutCalcule === 'partiel' || a.statutCalcule === 'perdu_partiel');
+       const articlesRetournes = articles.filter(a => a.statutCalcule === 'retourne');
+       const articlesPerdus = articles.filter(a => a.statutCalcule === 'perdu' || a.statutCalcule === 'perdu_partiel');
+
+       // --- CALCULS FINANCIERS ---
+       // Expédition: montant toujours 0
+       const totalAttendu = isExpedition ? 0 : (data.totalGeneral || 0);
+       const totalEncaisse = isExpedition ? 0 : (data.totalFinalEncaisse || 0);
+
+       // Valeur retournés: annule le manquant (colis rendu, pas une dette)
+       const valeurRetournes = articlesRetournes.reduce((sum, art) => {
+         const qteNonLivree = art.qteCommande - art.qteLivree;
          return sum + (qteNonLivree * (art.coutUnitaire || 0));
        }, 0);
-       
-       const totalAttendu = data.totalGeneral || 0;
-       const totalEncaisse = data.totalFinalEncaisse || 0;
-       const manquant = totalAttendu - totalEncaisse;
-       
+
+       // Valeur perdus: génère une dette réelle — uniquement sur la quantité réellement perdue
+       const valeurPerdus = articles.reduce((sum, art) => {
+         return sum + ((art.qtePerdue || 0) * (art.coutUnitaire || 0));
+       }, 0);
+
+       // Total attendu réel = total - retournés (pas une perte, colis récupéré)
+       const totalAttenduReel = totalAttendu - valeurRetournes;
+       const manquant = Math.max(0, totalAttenduReel - totalEncaisse);
+
+       // Statut global
+       let statutFinal = 'retourne';
+       if (articlesPerdus.length > 0 && articlesLivres.length === 0) {
+         statutFinal = 'perdu';
+       } else if (articlesPerdus.length > 0) {
+         statutFinal = 'perdu_partiel';
+       } else if (articlesLivres.length > 0 && articlesRetournes.length === 0) {
+         statutFinal = 'livre';
+       } else if (articlesLivres.length > 0) {
+         statutFinal = 'partiel';
+       }
+
+       // --- LIGNES DE DETTE (transparence totale) ---
+       const lignesDette = [];
+       const dateRef = data.dateValidation
+         ? (data.dateValidation.toDate ? data.dateValidation.toDate() : new Date(data.dateValidation))
+         : new Date();
+
+       if (manquant > 0 && !isExpedition) {
+         lignesDette.push({ motif: 'Versement insuffisant', montant: manquant, date: dateRef, numeroSuivi: data.numeroSuivi });
+       }
+       if (valeurPerdus > 0) {
+         lignesDette.push({ motif: 'Colis perdu', montant: valeurPerdus, date: dateRef, numeroSuivi: data.numeroSuivi });
+       }
+
+       // dateCreation = jour où la livraison a été assignée = jour réel de travail du livreur
+       const dateCreationRef = data.dateCreation
+         ? (data.dateCreation.toDate ? data.dateCreation.toDate() : new Date(data.dateCreation))
+         : null;
+
        historique.push({
          id: docSnap.id,
          numeroSuivi: data.numeroSuivi,
          type: data.type,
-         origine: origine,
+         isExpedition,
+         origine,
          expediteur: origine === 'partenaire' ? data.partenaireNom : 'Global Express',
-         // On garde le fallback simple d'origine pour l'historique
          nomClient: data.infosLivraison?.nomClient || data.infosLivraison?.entrepriseNom || 'Client',
          numeroDestinataire: data.infosLivraison?.numeroDestinataire || data.infosLivraison?.contactClient || '',
          quartier: data.infosLivraison?.quartier || 'N/A',
          ville: data.infosLivraison?.villeDestination || '',
-         
-         // Détails de validation
-         dateValidation: data.dateValidation ? (data.dateValidation.toDate ? data.dateValidation.toDate() : data.dateValidation) : null,
-         statutFinal: articlesLivres.length > 0 ? 'livre' : 'retourne',
-         
-         // Articles
-         articles: data.articles || [],
-         articlesLivres: articlesLivres,
-         articlesNonLivres: articlesNonLivres,
-         
-         // Montants détaillés
-         totalAttendu: totalAttendu,
-         montantLivre: montantLivre,
-         montantNonLivre: montantNonLivre,
-         totalEncaisse: totalEncaisse,
-         manquant: manquant,
-         
-         // Info validation
+         dateCreation: dateCreationRef,
+         dateValidation: dateRef,
+         statutFinal,
+         articles,
+         articlesLivres,
+         articlesRetournes,
+         articlesPerdus,
+         totalAttendu,
+         totalAttenduReel,
+         totalEncaisse,
+         valeurRetournes,
+         valeurPerdus,
+         manquant,
+         lignesDette,
          validePar: data.validePar || 'Admin',
          commentaireValidation: data.commentaireValidation || ''
        });

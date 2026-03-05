@@ -6,7 +6,7 @@ import {
   where, 
   getDocs,
   serverTimestamp 
-} from 'firebase/firestore';
+} from 'firebase/firestore'
 
 /**
  * Crée un nouveau partenaire dans la base de données

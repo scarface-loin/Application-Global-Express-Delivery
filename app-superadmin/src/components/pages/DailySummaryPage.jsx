@@ -8,16 +8,18 @@ import {
   FiUpload,
   FiX,
   FiUser,
-  FiPackage,
   FiFileText,
   FiDownload,
   FiEye,
   FiClock,
-  FiAlertCircle
+  FiAlertCircle,
+  FiMessageSquare
 } from 'react-icons/fi';
 import { fetchDailySummary, savePartnerPayment } from './logic/DailySummaryLogic';
 
-// Modal de visualisation de preuve de paiement
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. MODAL PREUVE (Visualisation)
+// ─────────────────────────────────────────────────────────────────────────────
 function PaymentProofModal({ payment, onClose }) {
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 animate-fade-in backdrop-blur-sm">
@@ -30,7 +32,7 @@ function PaymentProofModal({ payment, onClose }) {
               </div>
               <div>
                 <h2 className="text-xl font-bold text-gray-900">Preuve de paiement</h2>
-                <p className="text-sm text-gray-600">{payment.partenaire}</p>
+                <p className="text-sm text-gray-600">{payment.partenaireNom || "Partenaire"}</p>
               </div>
             </div>
             <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
@@ -39,7 +41,7 @@ function PaymentProofModal({ payment, onClose }) {
           </div>
 
           <div className="mb-6 bg-gray-50 rounded-xl p-4 border border-gray-100">
-            <div className="space-y-2 text-sm">
+            <div className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-gray-600">Date paiement:</span>
                 <span className="font-semibold text-gray-900">
@@ -48,8 +50,17 @@ function PaymentProofModal({ payment, onClose }) {
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">Montant versé:</span>
-                <span className="font-bold text-green-700">{payment.montantPaye.toLocaleString()} FCFA</span>
+                <span className="font-bold text-green-700">{payment.montantPaye?.toLocaleString()} FCFA</span>
               </div>
+              {/* Affichage de la justification si elle existe */}
+              {payment.justification && (
+                <div className="pt-2 border-t border-gray-200 mt-2">
+                  <span className="block text-gray-500 text-xs mb-1">Note / Justification :</span>
+                  <p className="text-gray-800 italic bg-white p-2 rounded border border-gray-200">
+                    "{payment.justification}"
+                  </p>
+                </div>
+              )}
             </div>
           </div>
 
@@ -80,12 +91,21 @@ function PaymentProofModal({ payment, onClose }) {
   );
 }
 
-// Modal d'enregistrement de paiement
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. MODAL ENREGISTREMENT (Action)
+// ─────────────────────────────────────────────────────────────────────────────
 function RecordPaymentModal({ partner, dateBilan, onClose, onSaveSuccess }) {
-  const [montantPaye, setMontantPaye] = useState(partner.montantAPayer); // Pré-rempli
+  const [montantPaye, setMontantPaye] = useState(partner.montantAPayer); 
+  const [justification, setJustification] = useState(''); // État pour la justification
   const [file, setFile] = useState(null);
   const [preview, setPreview] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  // Calcul dynamique de l'écart
+  const montantTheorique = parseFloat(partner.montantAPayer) || 0;
+  const montantSaisi = parseFloat(montantPaye) || 0;
+  const ecart = montantSaisi - montantTheorique;
+  const hasGap = Math.abs(ecart) > 5; // Tolérance de 5 FCFA
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
@@ -98,10 +118,17 @@ function RecordPaymentModal({ partner, dateBilan, onClose, onSaveSuccess }) {
   };
 
   const handleSave = async () => {
-    if (!montantPaye || parseFloat(montantPaye) <= 0) {
+    if (montantSaisi <= 0) {
       alert('Montant invalide');
       return;
     }
+    
+    // Validation Justification
+    if (hasGap && !justification.trim()) {
+      alert(`⚠️ Le montant diffère de ${ecart} FCFA. Vous devez obligatoirement saisir une justification.`);
+      return;
+    }
+
     if (!file) {
       alert('La preuve de paiement est obligatoire');
       return;
@@ -109,10 +136,18 @@ function RecordPaymentModal({ partner, dateBilan, onClose, onSaveSuccess }) {
 
     setLoading(true);
     try {
-      // Appel à la logique d'enregistrement (upload + firestore)
-      const result = await savePartnerPayment(partner.id, partner.nom, dateBilan, montantPaye, file);
+      // CORRECTION: On passe un objet complet comme défini dans DailySummaryLogic.js update
+      const result = await savePartnerPayment({
+        partnerId: partner.id,
+        partnerName: partner.nom,
+        dateBilan: dateBilan,
+        montantPaye: montantSaisi,
+        montantTheorique: montantTheorique,
+        justification: justification,
+        imageFile: file
+      });
       
-      onSaveSuccess(partner.id, parseFloat(montantPaye), result.captureEcranUrl, result.datePaiement);
+      onSaveSuccess(partner.id, montantSaisi, result.captureEcranUrl, result.datePaiement, justification);
       onClose();
     } catch (error) {
       alert("Erreur: " + error.message);
@@ -143,14 +178,15 @@ function RecordPaymentModal({ partner, dateBilan, onClose, onSaveSuccess }) {
           {/* Récapitulatif rapide */}
           <div className="mb-6 bg-blue-50 border border-blue-100 rounded-xl p-4">
              <div className="flex justify-between items-center mb-1">
-               <span className="text-gray-600 text-sm">À payer :</span>
-               <span className="font-bold text-blue-700 text-lg">{partner.montantAPayer.toLocaleString()} FCFA</span>
+               <span className="text-gray-600 text-sm">À payer (Théorique) :</span>
+               <span className="font-bold text-blue-700 text-lg">{montantTheorique.toLocaleString()} FCFA</span>
              </div>
              <p className="text-xs text-blue-600">Basé sur {partner.livraisonsEffectuees} livraisons validées.</p>
           </div>
 
           {/* Formulaire */}
-          <div className="space-y-4 mb-6">
+          <div className="space-y-5 mb-6">
+            {/* Champ Montant */}
             <div>
               <label className="block text-sm font-bold text-gray-700 mb-2">Montant versé</label>
               <div className="relative">
@@ -158,45 +194,70 @@ function RecordPaymentModal({ partner, dateBilan, onClose, onSaveSuccess }) {
                   type="number"
                   value={montantPaye}
                   onChange={(e) => setMontantPaye(e.target.value)}
-                  className="w-full pl-4 pr-12 py-3 border-2 border-gray-200 rounded-xl focus:border-blue-500 outline-none font-semibold"
+                  className={`w-full pl-4 pr-12 py-3 border-2 rounded-xl outline-none font-semibold transition-colors ${hasGap ? 'border-amber-400 bg-amber-50 text-amber-900' : 'border-gray-200 focus:border-blue-500'}`}
                 />
                 <span className="absolute right-4 top-3 text-gray-500 font-bold">FCFA</span>
               </div>
+              {hasGap && (
+                <p className="text-xs text-amber-600 mt-1 font-medium flex items-center gap-1">
+                  <FiAlertCircle /> Écart détecté de {ecart > 0 ? '+' : ''}{ecart} FCFA
+                </p>
+              )}
             </div>
 
+            {/* Champ Justification (Visible uniquement si écart) */}
+            {hasGap && (
+              <div className="animate-in fade-in slide-in-from-top-2 duration-300">
+                <label className="block text-sm font-bold text-gray-700 mb-2 flex items-center gap-2">
+                  <FiMessageSquare className="text-amber-500"/> 
+                  Justification <span className="text-red-500 text-xs">(Obligatoire)</span>
+                </label>
+                <textarea
+                  value={justification}
+                  onChange={(e) => setJustification(e.target.value)}
+                  placeholder="Ex: Retenue pour colis endommagé..."
+                  rows="2"
+                  className="w-full p-3 border-2 border-amber-200 rounded-xl focus:border-amber-500 outline-none text-sm bg-amber-50/30"
+                ></textarea>
+              </div>
+            )}
+
+            {/* Champ Preuve */}
             <div>
               <label className="block text-sm font-bold text-gray-700 mb-2">Preuve (Capture d'écran)</label>
               {!preview ? (
-                <label className="border-2 border-dashed border-gray-300 rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 hover:border-blue-400 transition-all">
-                  <FiUpload className="text-gray-400 mb-2" size={32} />
-                  <span className="text-sm text-gray-600">Cliquer pour uploader</span>
+                <label className="border-2 border-dashed border-gray-300 rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 hover:border-blue-400 transition-all group">
+                  <FiUpload className="text-gray-400 group-hover:text-blue-500 mb-2 transition-colors" size={32} />
+                  <span className="text-sm text-gray-600 group-hover:text-blue-600">Cliquer pour uploader</span>
                   <input type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
                 </label>
               ) : (
-                <div className="relative rounded-xl overflow-hidden border border-gray-200">
+                <div className="relative rounded-xl overflow-hidden border border-gray-200 group">
                   <img src={preview} alt="Aperçu" className="w-full h-40 object-cover" />
-                  <button 
-                    onClick={() => { setFile(null); setPreview(null); }}
-                    className="absolute top-2 right-2 bg-red-500 text-white p-1.5 rounded-full shadow-md hover:bg-red-600"
-                  >
-                    <FiX size={16} />
-                  </button>
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <button 
+                        onClick={() => { setFile(null); setPreview(null); }}
+                        className="bg-white text-red-500 px-4 py-2 rounded-full font-bold shadow-lg hover:bg-red-50"
+                      >
+                        Changer
+                      </button>
+                  </div>
                 </div>
               )}
             </div>
           </div>
 
           <div className="flex gap-3">
-            <button onClick={onClose} disabled={loading} className="flex-1 py-3 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200">
+            <button onClick={onClose} disabled={loading} className="flex-1 py-3 bg-gray-100 text-gray-700 rounded-xl font-semibold hover:bg-gray-200 transition-colors">
               Annuler
             </button>
             <button 
               onClick={handleSave} 
               disabled={loading}
-              className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 flex items-center justify-center gap-2 disabled:opacity-70"
+              className={`flex-1 py-3 text-white rounded-xl font-semibold flex items-center justify-center gap-2 disabled:opacity-70 transition-all ${hasGap ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'}`}
             >
               {loading && <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>}
-              {loading ? 'Envoi...' : 'Confirmer'}
+              {loading ? 'Envoi...' : (hasGap ? 'Justifier & Payer' : 'Confirmer')}
             </button>
           </div>
         </div>
@@ -205,7 +266,9 @@ function RecordPaymentModal({ partner, dateBilan, onClose, onSaveSuccess }) {
   );
 }
 
-// Page principale
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. PAGE PRINCIPALE
+// ─────────────────────────────────────────────────────────────────────────────
 export default function DailySummaryPage() {
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [partnersData, setPartnersData] = useState([]);
@@ -234,8 +297,8 @@ export default function DailySummaryPage() {
     }
   };
 
-  // Callback après paiement réussi pour mettre à jour l'UI sans recharger
-  const handlePaymentSuccess = (partnerId, amount, proofUrl, datePaiement) => {
+  // Callback après paiement réussi
+  const handlePaymentSuccess = (partnerId, amount, proofUrl, datePaiement, justification) => {
     setPartnersData(prev => prev.map(p => {
       if (p.id === partnerId) {
         return {
@@ -243,7 +306,8 @@ export default function DailySummaryPage() {
           statut: 'paye',
           montantPaye: amount,
           captureEcran: proofUrl,
-          datePaiement: datePaiement
+          datePaiement: datePaiement,
+          justification: justification // Mise à jour locale
         };
       }
       return p;
@@ -281,7 +345,7 @@ export default function DailySummaryPage() {
               type="date" 
               value={selectedDate}
               onChange={(e) => setSelectedDate(e.target.value)}
-              className="bg-transparent border-none outline-none text-gray-700 font-semibold"
+              className="bg-transparent border-none outline-none text-gray-700 font-semibold cursor-pointer"
             />
           </div>
         </div>
@@ -362,10 +426,15 @@ export default function DailySummaryPage() {
                         <p className="text-xs text-gray-500">{partner.type} • {partner.livraisonsEffectuees} course(s)</p>
                         
                         {/* Détail rapide montants */}
-                        <div className="mt-2 text-sm flex items-center gap-3 text-gray-600">
+                        <div className="mt-2 text-sm flex items-center gap-3 text-gray-600 flex-wrap">
                           <span>Brut: {partner.totalLivraisons.toLocaleString()}</span>
                           <span className="text-red-500">Frais: -{partner.fraisLivraison.toLocaleString()}</span>
                           <span className="font-bold text-gray-900 border-l pl-3">Net: {partner.montantAPayer.toLocaleString()}</span>
+                          {partner.montantPaye && partner.montantPaye !== partner.montantAPayer && (
+                            <span className="text-xs bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full ml-1">
+                               Ajusté
+                            </span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -386,7 +455,7 @@ export default function DailySummaryPage() {
                             onClick={() => setSelectedPaymentProof(partner)}
                             className="text-xs text-blue-600 hover:text-blue-800 underline flex items-center justify-end gap-1"
                           >
-                            <FiEye size={12} /> Voir preuve
+                            <FiEye size={12} /> Voir preuve & détails
                           </button>
                         </div>
                       )}
@@ -429,7 +498,7 @@ export default function DailySummaryPage() {
   );
 }
 
-// Petit composant utilitaire pour les cartes de stats
+// Composant utilitaire
 const StatCard = ({ icon, label, value, sub, bgColor }) => (
   <div className={`${bgColor} p-4 rounded-xl border border-gray-100 shadow-sm`}>
     <div className="flex items-center gap-2 mb-1 opacity-70">

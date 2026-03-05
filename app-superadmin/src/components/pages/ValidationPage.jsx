@@ -9,7 +9,7 @@ import {
   FiRefreshCw
 } from 'react-icons/fi';
 import ValidationModal from './modal/ValidationModal';
-import { fetchLivreursAValider, validerSessionLivreur } from './logic/ValidationPageLogic';
+import { fetchLivreursAValider, validerSessionLivreur, verifierArticlesSansStatut } from './logic/ValidationPageLogic';
 
 export default function ValidationPage() {
   const [livreurs, setLivreurs] = useState([]);
@@ -42,17 +42,28 @@ export default function ValidationPage() {
   const handleValidationSuccess = async (validationData) => {
     if (!selectedLivreur) return;
 
+    // Vérification avant envoi : articles sans statut ?
+    const problemes = verifierArticlesSansStatut(validationData.livraisons || []);
+    if (problemes.length > 0) {
+      const details = problemes.map(p =>
+        `• Livraison ${p.tracking} (${p.quartier}) : ${p.articles.join(', ')}`
+      ).join('\n');
+      setError(`Articles sans statut — veuillez affecter livré / retourné / perdu :\n${details}`);
+      return; // Ne ferme PAS le modal
+    }
+
     try {
       await validerSessionLivreur({
         livreurId: selectedLivreur.id,
         livreurNom: selectedLivreur.nom,
-        ...validationData // Contient livraisons, montantRecu, montantPerdu, notes
+        ...validationData
       });
 
       setLivreurs(prev => prev.filter(l => l.id !== selectedLivreur.id));
       setSelectedLivreur(null);
+      setError(null);
     } catch (err) {
-      alert("Erreur lors de la validation: " + err.message);
+      setError(err.message); // Affiche dans le bandeau rouge existant
     }
   };
   // Helpers Affichage

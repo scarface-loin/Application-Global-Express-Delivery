@@ -85,6 +85,8 @@ export default function HistoryPage() {
       case 'non_livre':
       case 'annule':
         return { label: 'Échec / Annulée', color: 'bg-red-100 text-red-800', icon: <FiSlash /> };
+      case 'partiel':
+        return { label: 'Partielle', color: 'bg-orange-100 text-orange-800', icon: <FiPackage /> };
       default:
         return { label: status, color: 'bg-gray-100 text-gray-800', icon: <FiPackage /> };
     }
@@ -174,6 +176,7 @@ export default function HistoryPage() {
             <select value={filters.statut} onChange={(e) => setFilters({...filters, statut: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:border-blue-500 outline-none bg-white">
               <option value="">Tous les statuts</option>
               <option value="delivered">Livrées / Validées</option>
+              <option value="partiel">Partielles</option>
               <option value="cancelled">Échecs / Annulées</option>
             </select>
             <div className="relative">

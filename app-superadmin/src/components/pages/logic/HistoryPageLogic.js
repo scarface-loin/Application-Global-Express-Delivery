@@ -13,7 +13,7 @@ const normalizeStatus = (rawStatus) => {
   
   const s = rawStatus.toLowerCase();
   
-  // Liste des statuts considérés comme "Livrée / Validée"
+  // Liste des statuts considérés comme "Livrée / Validée" 
   // D'après votre base de données, c'est souvent 'valide'
   if (['livre', 'valide', 'paye', 'terminé', 'delivered', 'termine'].includes(s)) {
     return 'delivered';
@@ -22,6 +22,11 @@ const normalizeStatus = (rawStatus) => {
   // Liste des statuts considérés comme "Annulée / Échec"
   if (['non_livre', 'annule', 'rejet', 'echoue', 'cancelled', 'echec'].includes(s)) {
     return 'cancelled';
+  }
+
+  // Statuts partiels : livraison incomplète (certains articles livrés, d'autres non)
+  if (['partiel', 'partial', 'partiellement_livre', 'perdu_partiel'].includes(s)) {
+    return 'partiel';
   }
 
   return s; // Retourne le statut tel quel si pas dans les listes (ex: 'en_cours')

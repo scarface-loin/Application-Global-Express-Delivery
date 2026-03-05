@@ -10,6 +10,7 @@ import LoginPage from './components/auth/LoginPage';
 import Dashboard from './components/common/Dashboard';
 import DeliveriesPage from './components/pages/DeliveriesPage';
 import ValidationPage from './components/pages/ValidationPage';
+import FacturePartenairePage from './components/pages/FacturePartenairePage'; // Import new page
 import CreateLivreurForm from './components/pages/CreateLivreurForm';
 import CreatePartnerForm from './components/pages/CreatePartnerForm';
 import CreateDeliveryPage from './components/pages/CreateDeliveryPage';
@@ -20,6 +21,7 @@ import HistoryPage from './components/pages/HistoryPage';
 import DailySummaryPage from './components/pages/DailySummaryPage';
 import DeliveryDriverSalaryPage from './components/pages/DeliveryDriverSalaryPage';
 import DeliveryMenListPage from './components/pages/DeliveryMenListPage';
+import DeliveryFeesReportPage from './components/pages/DeliveryFeesReportPage';
 
 import AdminNotificationBadge from './components/common/AdminNotificationBadge';
 
@@ -50,7 +52,6 @@ const AppContent = () => {
   const renderPage = () => {
     switch (currentPage) {
       case 'dashboard': 
-        // --- MODIFICATION ICI : On passe la fonction pour que les boutons fonctionnent ---
         return <Dashboard setCurrentPage={setCurrentPage} />;
         
       case 'deliverymen': 
@@ -59,6 +60,8 @@ const AppContent = () => {
         return <DeliveriesPage onNavigate={handleNavigate} />;
       case 'validation': 
         return <ValidationPage />;
+      case 'partner-validation': // Add new case
+        return <FacturePartenairePage />;
       case 'CreateLivreurForm': 
         return <CreateLivreurForm />;
       case 'create-partner':
@@ -71,6 +74,8 @@ const AppContent = () => {
         return <DailySummaryPage />;
       case 'driver-salary':
         return <DeliveryDriverSalaryPage />;
+      case 'delivery-fees-report':
+        return <DeliveryFeesReportPage />;
       case 'history': 
         return <HistoryPage />;
       case 'create-delivery': 
@@ -95,8 +100,10 @@ const AppContent = () => {
     'CreateLivreurForm': 'Recruter Livreur',
     'create-partner': 'Créer Partenaire',
     'validation': 'Validation des Livraisons',
+    'partner-validation': 'Validation des Partenaires', // Add new title
     'daily-summary': 'Récapitulatif de la journée',
     'driver-salary': 'Gestion Salaires Livreurs',
+    'delivery-fees-report': 'Rapport Frais de Livraison',
     'history': 'Historique global',
     'create-delivery': 'Créer une Livraison',
     'profile': 'Mon Profil',

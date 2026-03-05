@@ -10,7 +10,8 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Nouveaux états pour gérer le Cash et le Garage
-  const [cashRecu, setCashRecu] = useState(0); 
+  const [cashRecu, setCashRecu] = useState(0);
+  const [fraisExpeditionMap, setFraisExpeditionMap] = useState({});
   const [showGarage, setShowGarage] = useState(false);
   const [garageData, setGarageData] = useState({
     motif: '',
@@ -20,47 +21,78 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
   // --- MODIFICATION ICI : Initialisation des données au montage ---
   useEffect(() => {
     const initData = livreur.livraisons.map(liv => {
-      // On force tout le monde en "Livré" par défaut pour faciliter la tâche
+      
       const newArticles = liv.articles.map(art => ({
         ...art,
-        quantiteLivree: art.quantiteCommandee, // Tout est livré par défaut
+        quantiteLivree: parseInt(art.quantiteCommandee || 0), // Pré-rempli livré par défaut
         quantiteRetournee: 0,                  // Rien n'est retourné par défaut
         quantitePerdue: 0
       }));
       
-      // On applique les frais par défaut car on suppose que c'est livré
-      return { ...liv, articles: newArticles, fraisAppliques: true };
+      
+      const isExp = liv.infosLivraison?.type === 'expedition' || liv.type === 'expedition';
+      return { ...liv, articles: newArticles, fraisAppliques: !isExp, isExpedition: isExp };
     });
     setLocalLivraisons(initData);
+
+    // Pré-remplir les frais expédition avec coutPrestation (modifiable par l'admin)
+    const expMap = {};
+    initData.forEach(liv => {
+      if (liv.isExpedition) expMap[liv.id] = parseFloat(liv.coutPrestation || 0);
+    });
+    setFraisExpeditionMap(expMap);
+
   }, [livreur]);
 
   // --- TOTAUX GLOBAUX ---
   const totals = useMemo(() => {
-    let theorique = 0; // Ce qu'il DOIT avoir
-    let perduArticles = 0; // Valeur marchandise perdue
+    let theorique = 0;     // Montant brut encaissé sur les courses normales
+    let totalFraisExp = 0; // Frais avancés par le livreur pour les expéditions
+    let perduArticles = 0;
 
     localLivraisons.forEach(liv => {
       let livTotal = 0;
+
       liv.articles.forEach(art => {
-        theorique += (art.quantiteLivree * art.coutUnitaire);
-        livTotal += (art.quantiteLivree * art.coutUnitaire);
         perduArticles += (art.quantitePerdue * art.coutUnitaire);
+        if (!liv.isExpedition) {
+          const valLivree = art.quantiteLivree * art.coutUnitaire;
+          theorique += valLivree;
+          livTotal += valLivree;
+        }
       });
 
-      if (liv.fraisAppliques) {
+      if (!liv.isExpedition && liv.fraisAppliques) {
         theorique += liv.coutPrestation;
         livTotal += liv.coutPrestation;
       }
+
+      if (liv.isExpedition) {
+        const fraisExp = parseFloat(fraisExpeditionMap[liv.id] || 0);
+        totalFraisExp += fraisExp;
+        livTotal = fraisExp;
+      }
+
       liv.totalCalcule = livTotal;
     });
 
-    return { theorique, perduArticles };
-  }, [localLivraisons]);
+    // Net à déposer = encaissements courses − frais expédition avancés de la poche du livreur
+    const netADeposer = Math.max(0, theorique - totalFraisExp);
+
+    return { theorique: netADeposer, theoriquebrut: theorique, totalFraisExp, perduArticles };
+  }, [localLivraisons, fraisExpeditionMap]);
 
   // Met à jour le cash reçu par défaut quand le théorique change
   useEffect(() => {
     setCashRecu(totals.theorique);
   }, [totals.theorique]);
+
+  // Tous les articles doivent avoir reste === 0 pour autoriser la validation
+  const tousRenseignes = localLivraisons.length > 0 && localLivraisons.every(liv =>
+    liv.articles.every(art =>
+      (art.quantiteLivree + art.quantiteRetournee + art.quantitePerdue) === art.quantiteCommandee
+    )
+  );
 
   // Calcul du cash manquant (Dette financière)
   const cashManquant = Math.max(0, totals.theorique - cashRecu);
@@ -93,16 +125,7 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
 
   // --- VALIDATION FINALE ---
   const handleConfirm = async () => {
-    // Vérification articles
-    const isAllAssigned = localLivraisons.every(liv => 
-      liv.articles.every(art => 
-        (art.quantiteLivree + art.quantiteRetournee + art.quantitePerdue) === art.quantiteCommandee
-      )
-    );
-
-    if (!isAllAssigned) {
-      if (!window.confirm("Certains articles n'ont pas été totalement assignés (Reste > 0). Continuer ?")) return;
-    }
+    if (!tousRenseignes) return; // Bouton désactivé, sécurité en plus
 
     // Vérification Garage
     if (showGarage && (!garageData.motif || garageData.montantEstime <= 0)) {
@@ -142,7 +165,7 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
         <div className="p-5 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-3xl">
           <div>
             <h2 className="text-xl font-bold text-gray-900">Validation: {livreur.nom}</h2>
-            <p className="text-sm text-gray-500">Par défaut : Tout est considéré comme <b>LIVRÉ</b></p>
+            <p className="text-sm text-gray-500">Renseignez chaque article avant de valider</p>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full">
             <FiX size={24} className="text-gray-500" />
@@ -156,11 +179,18 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
           <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
               
-              {/* Total Théorique */}
+              {/* Total Net à Déposer */}
               <div className="p-3 bg-blue-50 rounded-lg border border-blue-100">
-                <p className="text-xs font-bold text-blue-600 uppercase mb-1">Total Théorique</p>
+                <p className="text-xs font-bold text-blue-600 uppercase mb-1">À Déposer (Net)</p>
                 <p className="text-2xl font-bold text-blue-900">{totals.theorique.toLocaleString()} F</p>
-                <p className="text-[10px] text-blue-400">Calculé sur les articles livrés</p>
+                {totals.totalFraisExp > 0 ? (
+                  <div className="mt-1 space-y-0.5">
+                    <p className="text-[10px] text-gray-500">Encaissé : {totals.theoriquebrut.toLocaleString()} F</p>
+                    <p className="text-[10px] text-orange-600 font-bold">− {totals.totalFraisExp.toLocaleString()} F frais expédition</p>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-blue-400">Courses encaissées + frais livraison</p>
+                )}
               </div>
 
               {/* Saisie Montant Reçu */}
@@ -260,7 +290,11 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
                       </div>
                       <div>
                         <p className="font-bold text-gray-800 text-sm">{liv.trackingNumber}</p>
-                        <p className="text-xs text-gray-500">{liv.quartier}</p>
+                        <p className="text-xs text-gray-500">
+                          {liv.infosLivraison?.type === 'expedition'
+                            ? liv.infosLivraison?.villeDestination || 'Ville inconnue'
+                            : liv.infosLivraison?.quartier || liv.quartier || 'N/A'}
+                        </p>
                       </div>
                     </div>
                     
@@ -318,10 +352,36 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
                         })}
                       </div>
                       
-                      <div className="mt-2 flex items-center gap-2">
-                         <input type="checkbox" checked={liv.fraisAppliques} onChange={() => toggleFrais(lIdx)} />
-                         <span className="text-xs text-gray-700">Appliquer frais ({liv.coutPrestation} F)</span>
-                      </div>
+                      {!liv.isExpedition && (
+                        // Course normale uniquement : checkbox frais de livraison
+                        <div className="mt-2 flex items-center gap-2">
+                          <input type="checkbox" checked={liv.fraisAppliques} onChange={() => toggleFrais(lIdx)} />
+                          <span className="text-xs text-gray-700">Appliquer frais livraison ({liv.coutPrestation} F)</span>
+                        </div>
+                      )}
+                      {liv.isExpedition && (
+                        <div className="mt-3 p-3 bg-orange-50 border border-orange-200 rounded-lg">
+                          <p className="text-[10px] font-bold text-orange-700 uppercase mb-2">
+                            🚚 Frais expédition agence (dépense)
+                          </p>
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              min="0"
+                              value={fraisExpeditionMap[liv.id] ?? 0}
+                              onChange={(e) => setFraisExpeditionMap(prev => ({
+                                ...prev,
+                                [liv.id]: parseFloat(e.target.value) || 0
+                              }))}
+                              className="flex-1 p-2 border border-orange-300 rounded-lg text-sm font-bold text-orange-900 bg-white focus:ring-2 focus:ring-orange-400 outline-none"
+                            />
+                            <span className="text-xs text-orange-700 font-semibold">FCFA</span>
+                          </div>
+                          <p className="text-[10px] text-orange-500 mt-1">
+                            Pré-rempli avec les frais de la livraison — modifiable si besoin
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -342,15 +402,25 @@ export default function ValidationModal({ livreur, onClose, onValidateSuccess })
 
         {/* Footer */}
         <div className="p-5 border-t border-gray-100 bg-white rounded-b-3xl">
+          {!tousRenseignes && (
+            <p className="text-center text-xs text-red-500 font-semibold mb-2 flex items-center justify-center gap-1">
+              <FiAlertCircle size={13} />
+              Tous les articles doivent être renseignés pour valider
+            </p>
+          )}
           <button
             onClick={handleConfirm}
-            disabled={isSubmitting}
+            disabled={isSubmitting || !tousRenseignes}
             className={`w-full py-4 font-bold rounded-xl shadow-lg flex justify-center items-center gap-2 transition-all 
-              ${cashManquant > 0 ? 'bg-orange-600 hover:bg-orange-700 text-white shadow-orange-200' : 'bg-green-600 hover:bg-green-700 text-white shadow-green-200'}
+              ${!tousRenseignes
+                ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                : cashManquant > 0
+                  ? 'bg-orange-600 hover:bg-orange-700 text-white shadow-orange-200'
+                  : 'bg-green-600 hover:bg-green-700 text-white shadow-green-200'}
             `}
           >
             {isSubmitting ? <FiRefreshCw className="animate-spin" /> : <FiCheck />}
-            {isSubmitting ? 'Validation...' : `Valider ${cashManquant > 0 ? '(Avec Dette)' : 'Session'}`}
+            {isSubmitting ? 'Validation...' : !tousRenseignes ? 'Articles incomplets...' : `Valider ${cashManquant > 0 ? '(Avec Dette)' : 'Session'}`}
           </button>
         </div>
 

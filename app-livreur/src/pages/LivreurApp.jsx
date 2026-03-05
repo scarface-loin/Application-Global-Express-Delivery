@@ -3,13 +3,14 @@ import {
   FiPackage, FiTruck, FiMapPin, FiPhone, FiCheckCircle, FiXCircle, 
   FiCalendar, FiUser, FiAlertCircle, FiHome, FiList, FiUser as FiProfile, 
   FiRefreshCw, FiBox, FiChevronDown, FiChevronUp, FiCopy, FiInfo,
-  FiNavigation, FiNavigation2
+  FiNavigation, FiNavigation2, FiSearch, FiX
 } from 'react-icons/fi';
 import {
   fetchLivraisonsJour,
   fetchHistoriqueLivraisons,
   fetchLivreurInfo,
-  calculateSituationDuJour 
+  calculateSituationDuJour,
+  calculerCycle25Jours
 } from '../logic/LivreurAppLogic';
 import ProfilePage from './ProfilePage';
 import locationService from '../services/LocationService';
@@ -33,6 +34,11 @@ export default function LivreurApp({ livreurId, onLogout }) {
 
   // État pour l'expansion des items de l'historique (AJOUT IMPORTANT)
   const [expandedHistoryItems, setExpandedHistoryItems] = useState(new Set());
+  // États pour la recherche et le filtre de l'historique
+  const [searchQuery, setSearchQuery] = useState('');
+  const [filterStatut, setFilterStatut] = useState('tous');
+  // Afficher le détail des dettes
+  const [showDetteDetail, setShowDetteDetail] = useState(false);
 
   useEffect(() => {
     if (livreurId) { 
@@ -175,6 +181,68 @@ export default function LivreurApp({ livreurId, onLogout }) {
   const detteAncienne = livreurInfo?.finance?.detteActuelle || 0;
   const manquantTotal = detteAncienne + situationDuJour.responsabiliteDuJour;
 
+  // --- Cycle de 25 jours ---
+  // Priorité: 1) finance.dateDebutCycle  2) dateCreation du compte
+  // 3) première livraison de l'historique  4) aujourd'hui (dernier recours)
+  const _getHDate = (h) => {
+    const raw = h.dateCreation || h.dateValidation;
+    if (!raw) return null;
+    const d = raw instanceof Date ? raw : (raw.toDate ? raw.toDate() : new Date(raw));
+    return isNaN(d.getTime()) ? null : d;
+  };
+
+  const premiereDate = historique.length > 0
+    ? historique.reduce((oldest, h) => {
+        const d = _getHDate(h);
+        return d && (!oldest || d < oldest) ? d : oldest;
+      }, null)
+    : null;
+
+  const rawDateDebut =
+    livreurInfo?.finance?.dateDebutCycle ||
+    livreurInfo?.dateCreation ||
+    premiereDate?.toISOString() ||
+    new Date().toISOString();
+
+  const dateDebutCycle = (() => {
+    if (!rawDateDebut) return new Date();
+    if (rawDateDebut instanceof Date) return rawDateDebut;
+    if (rawDateDebut.toDate) return rawDateDebut.toDate();
+    const d = new Date(rawDateDebut);
+    return isNaN(d.getTime()) ? new Date() : d;
+  })();
+
+  const cycle25 = calculerCycle25Jours(dateDebutCycle);
+
+  // --- Compteur livraisons réussies du cycle actuel ---
+  const debutCycleActuel = new Date(dateDebutCycle);
+  debutCycleActuel.setDate(debutCycleActuel.getDate() + (cycle25.numeroCycle - 1) * 25);
+  const finCycleActuel = new Date(debutCycleActuel);
+  finCycleActuel.setDate(finCycleActuel.getDate() + 25);
+
+  const livraisonsEffectuesCycle = historique.filter(h => {
+    const d = _getHDate(h);
+    const reussi = h.statutFinal === 'livre' || h.statutFinal === 'partiel';
+    return d && reussi && d >= debutCycleActuel && d < finCycleActuel;
+  }).length;
+
+  // --- Lignes de dette explicites (depuis l'historique) ---
+  const toutesLignesDette = historique.flatMap(h => h.lignesDette || []);
+  
+  // Retenue salaire déjà appliquée (depuis finance du livreur)
+  const retenueSalaire = livreurInfo?.finance?.retenueSalaire || 0;
+  const detteNette = Math.max(0, detteAncienne - retenueSalaire);
+
+  // --- Historique filtré ---
+  const historiqueFiltré = historique.filter(item => {
+    const matchSearch = !searchQuery || 
+      item.numeroSuivi?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      item.nomClient?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      item.quartier?.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchStatut = filterStatut === 'tous' || item.statutFinal === filterStatut;
+    return matchSearch && matchStatut;
+  });
+
   const cleanPhoneNumber = (phone) => {
     if (!phone) return '';
     return phone.toString().replace(/\s/g, '').replace(/-/g, '').replace(/\./g, '');
@@ -248,7 +316,7 @@ export default function LivreurApp({ livreurId, onLogout }) {
       <div className="pb-20">
         {/* En-tête avec infos du livreur */}
         <div className="bg-gradient-to-br from-blue-600 to-blue-800 text-white p-6 rounded-b-3xl shadow-lg">
-          <div className="flex items-center justify-between mb-6">
+          <div className="flex items-center justify-between mb-4">
             <div>
               <h1 className="text-2xl font-bold">Bonjour, {livreurInfo?.nom || 'Livreur'}</h1>
               <p className="text-blue-100 text-sm">Courses du jour</p>
@@ -262,37 +330,85 @@ export default function LivreurApp({ livreurId, onLogout }) {
             </button>
           </div>
 
-          {/* Carte Dette Totale */}
-          {(detteAncienne > 0 || situationDuJour.responsabiliteDuJour > 0) && (
+          {/* --- COMPTEUR 25 JOURS --- */}
+          <div className="bg-white/10 backdrop-blur-sm rounded-2xl p-4 mb-3 border border-white/20">
+            <div className="flex items-center justify-between mb-2">
+              <div>
+                <p className="text-xs text-blue-100 uppercase tracking-wider">Performances — Cycle {cycle25.numeroCycle}</p>
+                <p className="text-2xl font-bold text-white mt-0.5">{livraisonsEffectuesCycle} <span className="text-base font-normal text-blue-200">livraisons</span></p>
+              </div>
+              <div className="text-right">
+                <p className="text-xs text-blue-200">Jour {cycle25.jourDansCycle} / 25</p>
+                <p className="text-xs text-blue-300 mt-0.5">{cycle25.joursRestants} jour{cycle25.joursRestants > 1 ? 's' : ''} restant{cycle25.joursRestants > 1 ? 's' : ''}</p>
+              </div>
+            </div>
+            {/* Barre de progression */}
+            <div className="w-full bg-white/20 rounded-full h-2">
+              <div 
+                className="bg-white rounded-full h-2 transition-all duration-500"
+                style={{ width: `${cycle25.pourcentage}%` }}
+              />
+            </div>
+          </div>
+
+          {/* --- CARTE DETTE EXPLICITE --- */}
+          {(detteNette > 0 || situationDuJour.responsabiliteDuJour > 0) && (
             <div className="bg-red-500/20 backdrop-blur-sm rounded-2xl p-4 border-2 border-red-300/30">
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center justify-between mb-2">
                 <div>
-                  <p className="text-xs text-red-100 uppercase tracking-wider">Dette totale</p>
-                  <p className="text-3xl font-bold text-white mt-1">{manquantTotal.toLocaleString()} F</p>
+                  <p className="text-xs text-red-100 uppercase tracking-wider">Dette totale nette</p>
+                  <p className="text-3xl font-bold text-white mt-1">{(detteNette + situationDuJour.responsabiliteDuJour).toLocaleString()} F</p>
                 </div>
-                <div className="bg-red-600/30 p-3 rounded-full">
-                  <FiAlertCircle className="text-white" size={28} />
-                </div>
+                <button 
+                  onClick={() => setShowDetteDetail(v => !v)}
+                  className="bg-red-600/30 p-3 rounded-full hover:bg-red-600/50 transition-all"
+                >
+                  <FiAlertCircle className="text-white" size={24} />
+                </button>
               </div>
               
-              {/* Détail de la dette */}
               <div className="space-y-1.5 pt-3 border-t border-red-400/30">
-                {detteAncienne > 0 && (
+                {detteNette > 0 && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-red-100">Dette ancienne:</span>
-                    <span className="text-white font-semibold">{detteAncienne.toLocaleString()} F</span>
+                    <span className="text-red-100">Dette antérieure:</span>
+                    <span className="text-white font-semibold">{detteNette.toLocaleString()} F</span>
+                  </div>
+                )}
+                {retenueSalaire > 0 && (
+                  <div className="flex justify-between text-sm">
+                    <span className="text-green-200">Retenue salaire appliquée:</span>
+                    <span className="text-green-300 font-semibold">-{retenueSalaire.toLocaleString()} F</span>
                   </div>
                 )}
                 {situationDuJour.responsabiliteDuJour > 0 && (
                   <div className="flex justify-between text-sm">
-                    <span className="text-red-100">Courses du jour:</span>
+                    <span className="text-red-100">Courses du jour (en cours):</span>
                     <span className="text-white font-semibold">{situationDuJour.responsabiliteDuJour.toLocaleString()} F</span>
                   </div>
                 )}
-                <p className="text-xs text-red-200 mt-2 italic">
-                  ⚠️ En attente de validation admin
-                </p>
+                <p className="text-xs text-red-200 mt-1 italic">⚠️ En attente de validation admin</p>
               </div>
+
+              {/* --- DÉTAIL DES DETTES --- */}
+              {showDetteDetail && toutesLignesDette.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-red-400/30 space-y-2">
+                  <p className="text-xs text-red-100 font-bold uppercase tracking-wider">Détail des dettes</p>
+                  {toutesLignesDette.map((ligne, idx) => (
+                    <div key={idx} className="flex items-center justify-between bg-red-600/20 rounded-lg px-3 py-2">
+                      <div>
+                        <p className="text-sm font-semibold text-white">{ligne.motif}</p>
+                        <p className="text-xs text-red-200">{ligne.numeroSuivi} • {new Date(ligne.date).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+                      </div>
+                      <span className="text-sm font-bold text-red-200">{ligne.montant.toLocaleString()} F</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {showDetteDetail && toutesLignesDette.length === 0 && (
+                <div className="mt-3 pt-3 border-t border-red-400/30">
+                  <p className="text-xs text-red-200 text-center">Aucun détail disponible</p>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -404,17 +520,80 @@ export default function LivreurApp({ livreurId, onLogout }) {
           </div>
         </div>
 
-        {/* Liste de l'historique */}
+        {/* --- BARRE DE RECHERCHE & FILTRES --- */}
         <div className="p-4 space-y-3">
-          {historique.length === 0 ? (
+          {/* Recherche */}
+          <div className="relative">
+            <div className="absolute inset-y-0 left-3 flex items-center pointer-events-none">
+              <FiSearch className="text-gray-400" size={18} />
+            </div>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Rechercher par n° suivi, client, quartier..."
+              className="w-full pl-10 pr-4 py-3 bg-white rounded-xl border border-gray-200 text-sm focus:ring-2 focus:ring-blue-400 outline-none shadow-sm"
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery('')} className="absolute inset-y-0 right-3 flex items-center text-gray-400 hover:text-gray-600">
+                <FiX size={16} />
+              </button>
+            )}
+          </div>
+
+          {/* Filtres statut */}
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {[
+              { id: 'tous', label: 'Tous', color: 'bg-gray-900 text-white' },
+              { id: 'livre', label: '✅ Livré', color: 'bg-green-600 text-white' },
+              { id: 'retourne', label: '↩️ Retourné', color: 'bg-orange-500 text-white' },
+              { id: 'perdu', label: '🔴 Perdu', color: 'bg-red-600 text-white' },
+            ].map(f => (
+              <button
+                key={f.id}
+                onClick={() => setFilterStatut(f.id)}
+                className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-bold transition-all ${
+                  filterStatut === f.id ? f.color : 'bg-gray-100 text-gray-600'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Résultat de recherche */}
+          {(searchQuery || filterStatut !== 'tous') && (
+            <p className="text-xs text-gray-500">
+              {historiqueFiltré.length} résultat{historiqueFiltré.length !== 1 ? 's' : ''}
+            </p>
+          )}
+        </div>
+
+        {/* Liste de l'historique */}
+        <div className="px-4 space-y-3">
+          {historiqueFiltré.length === 0 ? (
             <div className="bg-white rounded-2xl shadow-md p-8 text-center">
               <FiCalendar className="text-gray-300 mx-auto mb-3" size={48} />
-              <p className="text-gray-500 font-semibold">Aucun historique</p>
-              <p className="text-gray-400 text-sm mt-1">Vos courses validées apparaîtront ici</p>
+              <p className="text-gray-500 font-semibold">
+                {historique.length === 0 ? 'Aucun historique' : 'Aucun résultat'}
+              </p>
+              <p className="text-gray-400 text-sm mt-1">
+                {historique.length === 0 ? 'Vos courses validées apparaîtront ici' : 'Essayez d\'autres termes de recherche'}
+              </p>
             </div>
           ) : (
-            historique.map((item) => {
+            historiqueFiltré.map((item) => {
               const isExpanded = expandedHistoryItems.has(item.id);
+
+              // Badge statut
+              const getStatutHistBadge = (sf) => {
+                if (sf === 'livre') return <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-green-100 text-green-700">✅ Livré</span>;
+                if (sf === 'retourne') return <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-orange-100 text-orange-700">↩️ Retourné</span>;
+                if (sf === 'perdu') return <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700">🔴 Perdu</span>;
+                if (sf === 'perdu_partiel') return <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700">⚠️ Partiel/Perdu</span>;
+                if (sf === 'partiel') return <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-yellow-100 text-yellow-700">🟡 Partiel</span>;
+                return <span className="px-2 py-0.5 rounded-full text-xs font-bold bg-gray-100 text-gray-700">{sf}</span>;
+              };
               
               return (
                 <div key={item.id} className="bg-white rounded-2xl shadow-md overflow-hidden">
@@ -423,124 +602,111 @@ export default function LivreurApp({ livreurId, onLogout }) {
                     onClick={() => toggleHistoryExpand(item.id)}
                   >
                     {/* En-tête de la carte */}
-                    <div className="flex items-center justify-between mb-3">
-                      <div className="flex items-center gap-2">
-                        <div className={`p-2 rounded-full ${
-                          item.statutFinal === 'livre' ? 'bg-green-100' : 'bg-orange-100'
-                        }`}>
-                          {item.statutFinal === 'livre' ? (
-                            <FiCheckCircle className="text-green-600" size={20} />
-                          ) : (
-                            <FiXCircle className="text-orange-600" size={20} />
-                          )}
-                        </div>
-                        <div>
-                          <p className="font-bold text-gray-900">{item.numeroSuivi}</p>
-                          <p className="text-xs text-gray-500">
-                            {new Date(item.dateValidation).toLocaleDateString('fr-FR', { 
-                              day: '2-digit', 
-                              month: 'short',
-                              year: 'numeric'
-                            })}
-                          </p>
-                        </div>
-                      </div>
-                      
-                      <div className="text-right">
-                        <p className="font-bold text-lg text-gray-900">
-                          {item.totalEncaisse.toLocaleString()} F
-                        </p>
+                    <div className="flex items-center justify-between mb-2">
+                      <div>
+                        <p className="font-bold text-gray-900">{item.numeroSuivi}</p>
                         <p className="text-xs text-gray-500">
-                          /{item.totalAttendu.toLocaleString()} F
+                          {new Date(item.dateValidation).toLocaleDateString('fr-FR', { 
+                            day: '2-digit', month: 'short', year: 'numeric'
+                          })}
                         </p>
+                      </div>
+                      <div className="text-right">
+                        {item.isExpedition ? (
+                          <span className="text-xs text-gray-400 font-medium">Expédition (0 F)</span>
+                        ) : (
+                          <>
+                            <p className="font-bold text-lg text-gray-900">{item.totalEncaisse.toLocaleString()} F</p>
+                            {item.totalAttenduReel !== item.totalEncaisse && (
+                              <p className="text-xs text-gray-400">/{item.totalAttenduReel.toLocaleString()} F attendus</p>
+                            )}
+                          </>
+                        )}
                       </div>
                     </div>
 
-                    {/* Info client */}
-                    <div className="flex items-center gap-2 text-sm text-gray-600 mb-2">
-                      <FiUser size={16} />
-                      <span className="font-medium">{item.nomClient}</span>
+                    <div className="flex items-center justify-between">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 text-sm text-gray-600">
+                          <FiUser size={14} />
+                          <span className="font-medium">{item.nomClient}</span>
+                        </div>
+                        <div className="flex items-center gap-2 text-sm text-gray-500">
+                          <FiMapPin size={14} />
+                          <span>{item.quartier}</span>
+                        </div>
+                      </div>
+                      {getStatutHistBadge(item.statutFinal)}
                     </div>
 
-                    <div className="flex items-center gap-2 text-sm text-gray-600">
-                      <FiMapPin size={16} />
-                      <span>{item.quartier}</span>
-                    </div>
+                    {/* Alerte manquant ou perdu */}
+                    {(item.manquant > 0 || item.valeurPerdus > 0) && (
+                      <div className="mt-2 flex items-center gap-2 bg-red-50 rounded-lg px-3 py-1.5">
+                        <FiAlertCircle className="text-red-500 flex-shrink-0" size={14} />
+                        <span className="text-xs text-red-700 font-semibold">
+                          {item.valeurPerdus > 0 && `Colis perdu: ${item.valeurPerdus.toLocaleString()} F`}
+                          {item.valeurPerdus > 0 && item.manquant > 0 && ' • '}
+                          {item.manquant > 0 && `Manquant: ${item.manquant.toLocaleString()} F`}
+                        </span>
+                      </div>
+                    )}
+                    {/* Retour sans dette */}
+                    {item.valeurRetournes > 0 && item.manquant === 0 && item.valeurPerdus === 0 && (
+                      <div className="mt-2 flex items-center gap-2 bg-orange-50 rounded-lg px-3 py-1.5">
+                        <FiCheckCircle className="text-orange-500 flex-shrink-0" size={14} />
+                        <span className="text-xs text-orange-700 font-semibold">
+                          Colis retourné: {item.valeurRetournes.toLocaleString()} F (pas de dette)
+                        </span>
+                      </div>
+                    )}
 
-                    {/* Indicateur expansion */}
-                    <div className="flex items-center justify-center mt-3">
-                      {isExpanded ? (
-                        <FiChevronUp className="text-gray-400" size={20} />
-                      ) : (
-                        <FiChevronDown className="text-gray-400" size={20} />
-                      )}
+                    <div className="flex justify-center mt-2">
+                      {isExpanded ? <FiChevronUp className="text-gray-400" size={18} /> : <FiChevronDown className="text-gray-400" size={18} />}
                     </div>
                   </div>
 
-                  {/* Détails étendus */}
+                  {/* --- DÉTAILS ÉTENDUS --- */}
                   {isExpanded && (
                     <div className="px-4 pb-4 pt-0 border-t space-y-3">
-                      {/* Liste de TOUS les articles avec leur état */}
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <p className="text-xs font-bold text-gray-700 mb-3">ARTICLES ({item.articles?.length || 0})</p>
+                      
+                      {/* Articles avec statuts */}
+                      <div className="bg-gray-50 rounded-xl p-3">
+                        <p className="text-xs font-bold text-gray-700 mb-3 uppercase tracking-wider">Articles ({item.articles?.length || 0})</p>
                         <div className="space-y-2">
                           {item.articles && item.articles.map((art, idx) => {
-                            const qteCommandee = parseInt(art.quantiteCommandee) || 0;
-                            const qteLivree = parseInt(art.quantiteLivree) || 0;
-                            const qteNonLivree = qteCommandee - qteLivree;
-                            const isFullyDelivered = qteLivree === qteCommandee;
-                            const isPartiallyDelivered = qteLivree > 0 && qteLivree < qteCommandee;
-                            const isNotDelivered = qteLivree === 0;
+                            const sc = art.statutCalcule;
+                            const qteAff = sc === 'livre' ? art.qteCommande : sc === 'partiel' ? art.qteLivree : art.qteCommande;
                             
+                            let bgClass = 'bg-green-50 border-green-400';
+                            let labelEl = <span className="flex items-center gap-1 text-green-700 text-xs font-semibold"><FiCheckCircle size={12}/> Livré: {qteAff}/{art.qteCommande}</span>;
+                            let valeur = art.qteLivree * (art.coutUnitaire || 0);
+                            
+                            if (sc === 'retourne') {
+                              bgClass = 'bg-orange-50 border-orange-400';
+                              labelEl = <span className="flex items-center gap-1 text-orange-700 text-xs font-semibold"><FiXCircle size={12}/> Retourné ({art.qteCommande}) — pas de dette</span>;
+                              valeur = 0;
+                            } else if (sc === 'perdu') {
+                              bgClass = 'bg-red-50 border-red-500';
+                              labelEl = <span className="flex items-center gap-1 text-red-700 text-xs font-semibold"><FiXCircle size={12}/> Perdu ({art.qteCommande}) — dette: {(art.qteCommande * (art.coutUnitaire || 0)).toLocaleString()} F</span>;
+                              valeur = art.qteCommande * (art.coutUnitaire || 0);
+                            } else if (sc === 'partiel') {
+                              bgClass = 'bg-yellow-50 border-yellow-400';
+                              const qteNL = art.qteCommande - art.qteLivree;
+                              labelEl = <div className="flex flex-col gap-0.5">
+                                <span className="flex items-center gap-1 text-green-700 text-xs font-semibold"><FiCheckCircle size={12}/> Livré: {art.qteLivree}</span>
+                                <span className="flex items-center gap-1 text-orange-700 text-xs font-semibold"><FiXCircle size={12}/> Retourné: {qteNL} — pas de dette</span>
+                              </div>;
+                            }
+
                             return (
-                              <div 
-                                key={idx} 
-                                className={`p-2 rounded-lg border-l-4 ${
-                                  isFullyDelivered 
-                                    ? 'bg-green-50 border-green-500' 
-                                    : isPartiallyDelivered 
-                                    ? 'bg-orange-50 border-orange-500'
-                                    : 'bg-red-50 border-red-500'
-                                }`}
-                              >
+                              <div key={idx} className={`p-2.5 rounded-lg border-l-4 ${bgClass}`}>
                                 <div className="flex justify-between items-start mb-1">
                                   <span className="font-medium text-gray-900 text-sm">{art.nom}</span>
-                                  <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-white">
-                                    {((qteLivree) * (art.coutUnitaire || 0)).toLocaleString()} F
+                                  <span className="text-xs font-bold bg-white px-2 py-0.5 rounded-full">
+                                    {valeur.toLocaleString()} F
                                   </span>
                                 </div>
-                                
-                                <div className="flex items-center gap-2 text-xs">
-                                  {isFullyDelivered && (
-                                    <>
-                                      <span className="flex items-center gap-1 text-green-700">
-                                        <FiCheckCircle size={12} />
-                                        <span className="font-semibold">Livré: {qteLivree}/{qteCommandee}</span>
-                                      </span>
-                                    </>
-                                  )}
-                                  
-                                  {isPartiallyDelivered && (
-                                    <>
-                                      <span className="flex items-center gap-1 text-green-700">
-                                        <FiCheckCircle size={12} />
-                                        <span className="font-semibold">Livré: {qteLivree}</span>
-                                      </span>
-                                      <span className="text-gray-400">•</span>
-                                      <span className="flex items-center gap-1 text-orange-700">
-                                        <FiXCircle size={12} />
-                                        <span className="font-semibold">Non livré: {qteNonLivree}</span>
-                                      </span>
-                                    </>
-                                  )}
-                                  
-                                  {isNotDelivered && (
-                                    <span className="flex items-center gap-1 text-red-700">
-                                      <FiXCircle size={12} />
-                                      <span className="font-semibold">Non livré: {qteCommandee}</span>
-                                    </span>
-                                  )}
-                                </div>
+                                {labelEl}
                               </div>
                             );
                           })}
@@ -548,28 +714,53 @@ export default function LivreurApp({ livreurId, onLogout }) {
                       </div>
 
                       {/* Résumé financier */}
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <p className="text-xs font-bold text-gray-700 mb-2">RÉSUMÉ FINANCIER</p>
-                        <div className="space-y-1 text-sm">
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Total attendu:</span>
-                            <span className="font-semibold text-gray-900">
-                              {item.totalAttendu.toLocaleString()} F
-                            </span>
-                          </div>
-                          <div className="flex justify-between">
-                            <span className="text-gray-600">Montant encaissé:</span>
-                            <span className="font-semibold text-green-600">
-                              {item.totalEncaisse.toLocaleString()} F
-                            </span>
-                          </div>
-                          {item.manquant > 0 && (
-                            <div className="flex justify-between pt-1 border-t">
-                              <span className="text-gray-600 font-medium">Manquant:</span>
-                              <span className="font-bold text-red-600">
-                                {item.manquant.toLocaleString()} F
-                              </span>
-                            </div>
+                      <div className="bg-gray-50 rounded-xl p-3">
+                        <p className="text-xs font-bold text-gray-700 mb-2 uppercase tracking-wider">Résumé financier</p>
+                        <div className="space-y-1.5 text-sm">
+                          {!item.isExpedition && (
+                            <>
+                              <div className="flex justify-between">
+                                <span className="text-gray-500">Total initial:</span>
+                                <span className="font-medium">{item.totalAttendu.toLocaleString()} F</span>
+                              </div>
+                              {item.valeurRetournes > 0 && (
+                                <div className="flex justify-between text-orange-700">
+                                  <span>↩️ Colis retourné:</span>
+                                  <span className="font-medium">-{item.valeurRetournes.toLocaleString()} F</span>
+                                </div>
+                              )}
+                              {item.totalAttenduReel !== item.totalAttendu && (
+                                <div className="flex justify-between font-semibold border-t pt-1.5">
+                                  <span className="text-gray-700">Total attendu réel:</span>
+                                  <span>{item.totalAttenduReel.toLocaleString()} F</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between text-green-700">
+                                <span>✅ Encaissé:</span>
+                                <span className="font-semibold">{item.totalEncaisse.toLocaleString()} F</span>
+                              </div>
+                              {item.valeurPerdus > 0 && (
+                                <div className="flex justify-between text-red-600 border-t pt-1.5">
+                                  <span>🔴 Valeur colis perdu (dette):</span>
+                                  <span className="font-bold">{item.valeurPerdus.toLocaleString()} F</span>
+                                </div>
+                              )}
+                              {item.manquant > 0 && (
+                                <div className="flex justify-between text-red-600 border-t pt-1.5">
+                                  <span>⚠️ Versement insuffisant (dette):</span>
+                                  <span className="font-bold">{item.manquant.toLocaleString()} F</span>
+                                </div>
+                              )}
+                              {item.manquant === 0 && item.valeurPerdus === 0 && (
+                                <div className="flex justify-between text-green-600 border-t pt-1.5">
+                                  <span>✅ Aucune dette sur cette livraison</span>
+                                  <span className="font-semibold">0 F</span>
+                                </div>
+                              )}
+                            </>
+                          )}
+                          {item.isExpedition && (
+                            <p className="text-gray-500 text-xs italic">Expédition — montant à récupérer: 0 F</p>
                           )}
                         </div>
                       </div>
@@ -577,13 +768,12 @@ export default function LivreurApp({ livreurId, onLogout }) {
                       {/* Commentaire de validation */}
                       {item.commentaireValidation && (
                         <div className="bg-blue-50 rounded-lg p-3">
-                          <p className="text-xs font-bold text-blue-900 mb-1">COMMENTAIRE</p>
+                          <p className="text-xs font-bold text-blue-900 mb-1">COMMENTAIRE ADMIN</p>
                           <p className="text-sm text-blue-800">{item.commentaireValidation}</p>
                         </div>
                       )}
 
-                      {/* Validateur */}
-                      <p className="text-xs text-gray-500 text-center">
+                      <p className="text-xs text-gray-400 text-center">
                         Validé par: <span className="font-semibold">{item.validePar}</span>
                       </p>
                     </div>
@@ -624,7 +814,16 @@ export default function LivreurApp({ livreurId, onLogout }) {
       <main className="max-w-md mx-auto min-h-screen bg-gray-50 relative">
         {activeTab === 'home' && renderHomePage()}
         {activeTab === 'history' && renderHistoryPage()}
-        {activeTab === 'profile' && <ProfilePage livreurId={livreurId} onLogout={onLogout} />}
+        {activeTab === 'profile' && (
+          <ProfilePage
+            livreurId={livreurId}
+            onLogout={onLogout}
+            historique={historique}
+            livraisonsJour={livraisonsJour}
+            cycle25={cycle25}
+            livraisonsEffectuesCycle={livraisonsEffectuesCycle}
+          />
+        )}
       </main>
 
       {/* MODALE DE DÉTAIL DE LA LIVRAISON */}

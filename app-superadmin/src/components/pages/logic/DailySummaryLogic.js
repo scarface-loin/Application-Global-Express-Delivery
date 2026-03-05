@@ -1,21 +1,18 @@
-
 import { db, storage } from '../../../services/firebase';
 import { 
   collection, 
   query, 
-  where, 
+  where,  
   getDocs, 
+  doc,
   addDoc,
-  serverTimestamp 
+  serverTimestamp,
+  writeBatch
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
-/**
- * Récupère le résumé journalier des partenaires pour une date donnée
- */
 export const fetchDailySummary = async (dateStr) => {
   try {
-    // 1. Définir la plage de date (00:00:00 à 23:59:59)
     const startDate = new Date(dateStr);
     startDate.setHours(0, 0, 0, 0);
     const endDate = new Date(dateStr);
@@ -24,34 +21,44 @@ export const fetchDailySummary = async (dateStr) => {
     const startISO = startDate.toISOString();
     const endISO = endDate.toISOString();
 
-    // 2. Récupérer les livraisons partenaires validées/livrées ce jour-là
-    // On suppose que le paiement se base sur la date de LIVRAISON
-    const qLiv = query(
-      collection(db, 'livraison_partenaire'),
-      where('statut', '==', 'livre'), // Seules les livrées comptent
-      where('dateLivraison', '>=', startISO),
-      where('dateLivraison', '<=', endISO)
+    // MODIFICATION : On interroge les 3 statuts validés en parallèle.
+    // Firestore ne supporte pas le OR natif sur un même champ, d'où les 3 requêtes.
+    const statutsValides = ['livre', 'partiel', 'non_livre'];
+
+    const queries = statutsValides.map(statut =>
+      getDocs(query(
+        collection(db, 'livraison_partenaire'),
+        where('statut', '==', statut),
+        where('dateLivraison', '>=', startISO),
+        where('dateLivraison', '<=', endISO)
+      ))
     );
 
-    const snapshot = await getDocs(qLiv);
-    
-    // 3. Récupérer les paiements déjà effectués pour cette date
+    const [snapLivre, snapPartiel, snapNonLivre] = await Promise.all(queries);
+
+    // Fusion des 3 snapshots en un seul tableau de docs
+    const allDocs = [
+      ...snapLivre.docs,
+      ...snapPartiel.docs,
+      ...snapNonLivre.docs,
+    ];
+
+    // Chargement des paiements existants pour la journée
     const qPay = query(
       collection(db, 'paiements_partenaires'),
       where('dateBilan', '==', dateStr)
     );
     const paySnapshot = await getDocs(qPay);
     const paiementsMap = {};
-    paySnapshot.forEach(doc => {
-      const data = doc.data();
-      paiementsMap[data.partenaireId] = data;
+    paySnapshot.forEach(d => {
+      const data = d.data();
+      paiementsMap[data.partenaireId] = { ...data, id: d.id };
     });
 
-    // 4. Grouper par partenaire
     const partnersMap = {};
 
-    snapshot.forEach(doc => {
-      const data = doc.data();
+    allDocs.forEach(docSnap => {
+      const data = docSnap.data();
       const pid = data.partenaireId;
 
       if (!partnersMap[pid]) {
@@ -60,33 +67,47 @@ export const fetchDailySummary = async (dateStr) => {
           nom: data.partenaireNom || 'Partenaire Inconnu',
           type: data.type || 'Standard',
           livraisonsEffectuees: 0,
-          totalLivraisons: 0,   // Montant encaissé (totalGeneral)
-          fraisLivraison: 0,    // Frais (coutPrestation)
-          montantAPayer: 0,     // Net à reverser
+          livraisonsPartielles: 0,   // NOUVEAU : compteur partiel
+          livraisonsNonLivrees: 0,   // NOUVEAU : compteur non livré
+          totalLivraisons: 0,
+          fraisLivraison: 0,
+          montantAPayer: 0,
           livraisons: [],
           statut: 'non_paye'
         };
       }
 
-      // Calculs
       const montant = parseFloat(data.totalGeneral) || 0;
       const frais = parseFloat(data.coutPrestation) || 0;
       const net = montant - frais;
+      const statutLivraison = data.statut; // 'livre', 'partiel' ou 'non_livre'
 
       partnersMap[pid].livraisonsEffectuees += 1;
-      partnersMap[pid].totalLivraisons += montant;
-      partnersMap[pid].fraisLivraison += frais;
-      partnersMap[pid].montantAPayer += net;
+
+      // NOUVEAU : compteurs par statut pour affichage détaillé
+      if (statutLivraison === 'partiel') partnersMap[pid].livraisonsPartielles += 1;
+      if (statutLivraison === 'non_livre') partnersMap[pid].livraisonsNonLivrees += 1;
+
+      // On comptabilise le montant réel encaissé (totalFinalEncaisse si dispo, sinon totalGeneral)
+      const montantEncaisse = parseFloat(data.totalFinalEncaisse ?? data.totalGeneral) || 0;
+      const fraisEncaisse = statutLivraison === 'non_livre' ? 0 : frais; // Pas de frais si non livré
+      const netEncaisse = montantEncaisse - fraisEncaisse;
+
+      partnersMap[pid].totalLivraisons += montantEncaisse;
+      partnersMap[pid].fraisLivraison += fraisEncaisse;
+      partnersMap[pid].montantAPayer += netEncaisse;
 
       partnersMap[pid].livraisons.push({
         id: data.numeroSuivi,
-        montant: montant,
-        frais: frais,
-        heure: new Date(data.dateLivraison).toLocaleTimeString('fr-FR', {hour: '2-digit', minute:'2-digit'})
+        docId: docSnap.id,
+        statut: statutLivraison, // NOUVEAU : statut visible dans le détail
+        montant: montantEncaisse,
+        frais: fraisEncaisse,
+        heure: new Date(data.dateLivraison).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
       });
     });
 
-    // 5. Appliquer les statuts de paiement existants
+    // Fusion avec les paiements déjà enregistrés
     Object.keys(partnersMap).forEach(pid => {
       if (paiementsMap[pid]) {
         const pay = paiementsMap[pid];
@@ -94,7 +115,8 @@ export const fetchDailySummary = async (dateStr) => {
         partnersMap[pid].montantPaye = pay.montantPaye;
         partnersMap[pid].datePaiement = pay.datePaiement;
         partnersMap[pid].captureEcran = pay.captureEcranUrl;
-        partnersMap[pid].paiementId = pay.id; // Pour référence
+        partnersMap[pid].paiementId = pay.id;
+        partnersMap[pid].justification = pay.justification || null;
       }
     });
 
@@ -107,41 +129,84 @@ export const fetchDailySummary = async (dateStr) => {
 };
 
 /**
- * Enregistre un paiement partenaire avec preuve image
+ * Enregistre un paiement partenaire, gère la justification et notifie
  */
-export const savePartnerPayment = async (partnerId, partnerName, dateBilan, amount, imageFile) => {
+export const savePartnerPayment = async ({
+  partnerId, 
+  partnerName, 
+  dateBilan, 
+  montantPaye,
+  montantTheorique,
+  justification,
+  imageFile
+}) => {
   try {
-    // 1. Upload de l'image sur Storage
-    // Chemin: preuves_paiement/YYYY-MM-DD/partnerId_timestamp.jpg
+    const adminId = localStorage.getItem('admin_id') || 'SUPER_ADMIN';
+    const montantVerser = parseFloat(montantPaye);
+    const montantAttendu = parseFloat(montantTheorique);
+    const ecart = montantVerser - montantAttendu;
+
+    if (Math.abs(ecart) > 5 && (!justification || justification.trim() === '')) {
+      throw new Error(`Le montant diffère de ${ecart} FCFA. Une justification est obligatoire.`);
+    }
+
+    if (!imageFile) throw new Error("La capture d'écran de la preuve est obligatoire.");
+    
     const timestamp = Date.now();
     const storageRef = ref(storage, `preuves_paiement/${dateBilan}/${partnerId}_${timestamp}`);
-    
     const uploadResult = await uploadBytes(storageRef, imageFile);
     const downloadURL = await getDownloadURL(uploadResult.ref);
 
-    // 2. Création du document de paiement dans Firestore
+    const batch = writeBatch(db);
+
+    const paiementRef = doc(collection(db, 'paiements_partenaires'));
     const paiementData = {
       partenaireId: partnerId,
       partenaireNom: partnerName,
-      dateBilan: dateBilan, // La date concernée par le paiement
-      montantPaye: parseFloat(amount),
+      dateBilan: dateBilan,
+      montantPaye: montantVerser,
+      montantTheorique: montantAttendu,
+      ecart: ecart,
+      justification: justification || null,
       captureEcranUrl: downloadURL,
-      datePaiement: new Date().toISOString(), // Date réelle de l'action
-      creePar: 'ADMIN', // À remplacer par l'ID admin réel si dispo
+      datePaiement: new Date().toISOString(),
+      creePar: adminId,
       createdAt: serverTimestamp()
     };
+    batch.set(paiementRef, paiementData);
 
-    const docRef = await addDoc(collection(db, 'paiements_partenaires'), paiementData);
+    const notifRef = doc(collection(db, 'notifications_partenaires'));
+    
+    let messageNotif = `Votre paiement de ${montantVerser.toLocaleString('fr-FR')} FCFA pour la journée du ${new Date(dateBilan).toLocaleDateString('fr-FR')} a été effectué.`;
+    
+    if (Math.abs(ecart) > 5) {
+      messageNotif += ` (Ajustement : ${justification})`;
+    }
+
+    const notifData = {
+      partenaireId: partnerId,
+      titre: "Paiement Reçu 💰",
+      message: messageNotif,
+      type: 'paiement_recu',
+      date: new Date().toISOString(),
+      montant: montantVerser,
+      preuveUrl: downloadURL,
+      lu: false,
+      createdAt: serverTimestamp()
+    };
+    batch.set(notifRef, notifData);
+
+    await batch.commit();
 
     return {
       success: true,
-      paiementId: docRef.id,
+      paiementId: paiementRef.id,
       captureEcranUrl: downloadURL,
       datePaiement: paiementData.datePaiement
     };
 
   } catch (error) {
     console.error("Erreur savePartnerPayment:", error);
-    throw new Error("Échec de l'enregistrement du paiement.");
+    throw new Error(error.message || "Échec de l'enregistrement du paiement.");
   }
 };

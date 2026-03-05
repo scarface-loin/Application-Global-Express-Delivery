@@ -1,5 +1,3 @@
-// src/components/layout/Sidebar.js
-
 import React from 'react';
 import {
   FiHome,
@@ -13,7 +11,9 @@ import {
   FiClock,
   FiFileText,
   FiDollarSign,
-  FiUsers // <--- 1. AJOUTER L'IMPORT ICI
+  FiUsers,
+  FiCheckSquare, // <--- Import new icon
+  FiBarChart2,
 } from 'react-icons/fi';
 import { useAuth } from '../../context/AuthContext';
 
@@ -31,6 +31,7 @@ export const Sidebar = ({ isOpen, onClose, currentPage, setCurrentPage }) => {
     { id: 'validation', label: 'Validation', icon: <FiCheckCircle /> },
     { id: 'daily-summary', label: 'Récapitulatif jour', icon: <FiFileText /> },
     { id: 'driver-salary', label: 'Salaires Livreurs', icon: <FiDollarSign /> },
+    { id: 'delivery-fees-report', label: 'Frais de Livraison', icon: <FiBarChart2 /> },
     { id: 'history', label: 'Historique', icon: <FiClock /> },
     { id: 'create-delivery', label: 'Créer Livraison', icon: <FiPlus /> },
   ];

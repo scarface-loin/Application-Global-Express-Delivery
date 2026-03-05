@@ -8,7 +8,7 @@ const WHATSAPP_SERVER_URL = "https://whatsapp-bot-34294235336.europe-west1.run.a
 /**
  * ✅ AMÉLIORATION: Envoi de notification WhatsApp avec toutes les données
  * 
- * ⚠️ IMPORTANT: deliveryData.id doit contenir l'ID du document Firestore
+ * ⚠️IMPORTANT: deliveryData.id doit contenir l'ID du document Firestore
  * Exemple d'utilisation:
  * 
  * const result = await createDeliveryInFirebase(formData, articles, type);

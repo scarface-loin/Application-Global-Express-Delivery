@@ -12,7 +12,7 @@ export const fetchAllLivreurs = async () => {
     querySnapshot.forEach((doc) => {
       const data = doc.data();
       
-      // On s'assure que la structure est complète (défense contre données incomplètes)
+      // On s'assure que la structure est complète (défense contre données incomplètes) 
       livreursData.push({
         id: doc.id,
         ...data,

@@ -11,17 +11,34 @@ import {
   increment 
 } from 'firebase/firestore';
 
-// ... (Garder fetchLivreursAValider inchangé) ...
+/**
+ * CHARGEMENT DES DONNÉES
+ */
 export const fetchLivreursAValider = async () => {
   try {
-    const qInterne = query(collection(db, "livraisons"), where("dateValidation", "==", null), where("livreurId", "!=", null));
-    const qPartenaire = query(collection(db, "livraison_partenaire"), where("dateValidation", "==", null), where("livreurId", "!=", null));
-    const [snapInterne, snapPartenaire] = await Promise.all([getDocs(qInterne), getDocs(qPartenaire)]);
+    const qInterne = query(
+      collection(db, "livraisons"), 
+      where("dateValidation", "==", null), 
+      where("livreurId", "!=", null)
+    );
+
+    const qPartenaire = query(
+      collection(db, "livraison_partenaire"),
+      where("statut", "==", "en_cours"), 
+      where("livreurId", "!=", null)
+    );
+
+    const [snapInterne, snapPartenaire] = await Promise.all([
+      getDocs(qInterne),
+      getDocs(qPartenaire)
+    ]);
+
     const livreursMap = {};
 
     const processDoc = (docSnap, origine) => {
       const data = docSnap.data();
       const lid = data.livreurId;
+      
       if (!livreursMap[lid]) {
         livreursMap[lid] = {
           id: lid,
@@ -35,26 +52,31 @@ export const fetchLivreursAValider = async () => {
       
       const articles = (data.articles || []).map(art => ({
         ...art,
-        quantiteLivree: data.statut === 'livre' ? art.quantiteCommandee : 0,
-        quantiteRetournee: data.statut === 'non_livre' ? art.quantiteCommandee : 0,
+        quantiteLivree: parseInt(art.quantiteCommandee || 0),
+        quantiteRetournee: 0,
         quantitePerdue: 0,
         coutUnitaire: parseFloat(art.coutUnitaire || 0)
       }));
 
-      const montant = data.totalGeneral || 0;
-      if (data.statut === 'livre') {
-        livreursMap[lid].totalCollecte += montant;
-      }
-      
+      const totalArticles = articles.reduce((sum, art) => sum + (art.quantiteLivree * art.coutUnitaire), 0);
+      const coutPrestation = parseFloat(data.coutPrestation || 0);
+      const montantTotalEstime = origine === 'partenaire' 
+        ? parseFloat(data.totalGeneral || 0) 
+        : (totalArticles + coutPrestation);
+
+      livreursMap[lid].totalCollecte += montantTotalEstime;
       livreursMap[lid].nbLivraisons++;
+      
       livreursMap[lid].livraisons.push({
         id: docSnap.id,
         origine: origine,
         trackingNumber: data.numeroSuivi,
         statutOriginal: data.statut,
-        coutPrestation: parseFloat(data.coutPrestation || 0),
-        quartier: data.infosLivraison?.quartier || 'N/A',
-        articles: articles, 
+        coutPrestation: coutPrestation,
+        quartier: data.infosLivraison?.quartier || data.infosLivraison?.villeDestination || 'N/A',
+        infosLivraison: data.infosLivraison || {},
+        articles: articles,
+        totalCalcule: montantTotalEstime
       });
     };
 
@@ -70,18 +92,58 @@ export const fetchLivreursAValider = async () => {
 };
 
 /**
+ * Vérifie que tous les articles de toutes les livraisons ont un statut défini.
+ * Un article est "sans statut" si quantiteLivree + quantiteRetournee + quantitePerdue === 0.
+ * Retourne la liste des livraisons avec articles problématiques, ou [] si tout est OK.
+ */
+export const verifierArticlesSansStatut = (livraisons) => {
+  const problemes = [];
+
+  livraisons.forEach(liv => {
+    const articlesSansStatut = (liv.articles || []).filter(art => {
+      const livree = parseInt(art.quantiteLivree || 0);
+      const retournee = parseInt(art.quantiteRetournee || 0);
+      const perdue = parseInt(art.quantitePerdue || 0);
+      return livree === 0 && retournee === 0 && perdue === 0;
+    });
+
+    if (articlesSansStatut.length > 0) {
+      problemes.push({
+        livraisonId: liv.id,
+        tracking: liv.trackingNumber || liv.id,
+        quartier: liv.quartier,
+        articles: articlesSansStatut.map(a => a.nom || a.designation || 'Article sans nom')
+      });
+    }
+  });
+
+  return problemes;
+};
+
+/**
  * CLÔTURE FINALE AVEC GESTION GARAGE ET CASH MANQUANT
  */
 export const validerSessionLivreur = async ({ 
   livreurId, 
   livreurNom, 
   livraisons, 
-  montantTheorique, // Ce qu'il devait avoir
-  montantRecu,      // Ce qu'il a donné (Cash)
-  montantPerduArticles, // Valeur des marchandises perdues
-  garageRequest,    // Objet { actif: true, motif: "...", montantEstime: 10000 }
+  montantTheorique, 
+  montantRecu,      
+  montantPerduArticles,
+  garageRequest,    
   notes 
 }) => {
+  // Guard : bloquer si des articles n'ont aucun des 3 statuts
+  const problemes = verifierArticlesSansStatut(livraisons);
+  if (problemes.length > 0) {
+    const details = problemes.map(p =>
+      `• Livraison ${p.tracking} (${p.quartier}) : ${p.articles.join(', ')}`
+    ).join('\n');
+    throw new Error(
+      `Impossible de valider : des articles n'ont aucun statut (livré / retourné / perdu) :\n\n${details}`
+    );
+  }
+
   try {
     const adminId = localStorage.getItem('admin_id') || 'ADMIN';
     const now = new Date().toISOString();
@@ -89,36 +151,53 @@ export const validerSessionLivreur = async ({
 
     // 1. Mise à jour des livraisons individuelles
     livraisons.forEach(liv => {
-      const collectionName = liv.origine === 'partenaire' ? 'livraison_partenaire' : 'livraisons';
+      const collectionName = (liv.origine === 'partenaire') ? 'livraison_partenaire' : 'livraisons';
       const ref = doc(db, collectionName, liv.id);
       
-      batchPromises.push(
-        updateDoc(ref, {
-          dateValidation: now,
-          adminIdValidation: adminId,
-          statut: 'valide',
-          articles: liv.articles,
-          totalFinalEncaisse: liv.totalCalcule, 
-          updatedAt: serverTimestamp()
-        })
-      );
+      const isTotalementLivre = liv.articles.every(a => a.quantiteLivree > 0 && a.quantiteRetournee === 0);
+      const isTotalementRetour = liv.articles.every(a => a.quantiteLivree === 0 && a.quantiteRetournee > 0);
+      
+      let statutFinal = 'partiel';
+      if (isTotalementLivre) statutFinal = 'livre';
+      else if (isTotalementRetour) statutFinal = 'non_livre';
+
+      const updateData = {
+        dateValidation: now,
+        adminIdValidation: adminId,
+        statut: statutFinal,
+        articles: liv.articles,
+        totalFinalEncaisse: liv.totalCalcule, 
+        updatedAt: serverTimestamp()
+      };
+
+      // CORRECTION : dateLivraison est écrit pour TOUS les statuts partenaire validés,
+      // pas uniquement 'livre'. C'est ce champ qui permet l'apparition dans le récapitulatif.
+      if (liv.origine === 'partenaire') {
+        updateData.dateLivraison = now;
+      }
+
+      batchPromises.push(updateDoc(ref, updateData));
     });
 
     // 2. Calcul des Dettes
-    // Cash manquant = Ce qu'il devait avoir - Ce qu'il a donné
     const cashManquant = Math.max(0, montantTheorique - montantRecu);
-    
-    // Total à ajouter à la dette = Cash Manquant + Marchandise Perdue
     const totalDetteAjoutee = cashManquant + montantPerduArticles;
 
     // 3. Enregistrement du versement global
+    // Pour les expéditions (hors ville), le montant n'est pas encaissé par le livreur.
+    // On calcule le montant attendu en ne comptant que les livraisons de type 'course'.
+    const montantExpeditions = livraisons
+      .filter(liv => liv.infosLivraison?.type === 'expedition')
+      .reduce((sum, liv) => sum + (liv.totalCalcule || 0), 0);
+    const montantAttenduFinal = Math.max(0, parseFloat(montantTheorique) - montantExpeditions);
+
     batchPromises.push(
       addDoc(collection(db, "versements_livreurs"), {
         livreurId,
         livreurNom,
-        montantAttendu: parseFloat(montantTheorique),
+        montantAttendu: montantAttenduFinal,
         montantVerse: parseFloat(montantRecu),
-        montantManquant: parseFloat(cashManquant), // Cash perdu/gardé
+        montantManquant: parseFloat(cashManquant),
         montantPerduMarchandise: parseFloat(montantPerduArticles),
         date: now,
         nbCourses: livraisons.length,
@@ -129,7 +208,7 @@ export const validerSessionLivreur = async ({
       })
     );
 
-    // 4. Gestion de la Demande Garage (Si activée)
+    // 4. Gestion Garage
     if (garageRequest && garageRequest.actif) {
       batchPromises.push(
         addDoc(collection(db, "demandes_garage"), {
@@ -137,29 +216,16 @@ export const validerSessionLivreur = async ({
           livreurNom,
           motif: garageRequest.motif,
           description: garageRequest.description || "Demande créée lors de la validation",
-          montantManquant: parseFloat(garageRequest.montantEstime || 0), // Souvent égal au cash manquant
+          montantManquant: parseFloat(garageRequest.montantEstime || 0),
           urgence: 'normale',
-          statut: 'en_attente', // Pour validation Super Admin
+          statut: 'en_attente',
           dateCreation: now,
           creePar: adminId
         })
       );
-      
-      // Notification Admin (optionnel, selon ta structure)
-      batchPromises.push(
-         addDoc(collection(db, "notifications_admin"), {
-           type: "demande_garage",
-           message: `Nouvelle demande garage pour ${livreurNom}`,
-           lu: false,
-           createdAt: serverTimestamp(),
-           demandeId: null // Sera mis à jour si on faisait autrement, mais ici c'est ok
-         })
-      );
     }
 
     // 5. Mise à jour de la dette du livreur
-    // On ajoute TOUT en dette. Si le garage est validé plus tard par le Super Admin, 
-    // la fonction 'validerDemandeGarage' viendra REDUIRE cette dette.
     if (totalDetteAjoutee > 0) {
       const livreurRef = doc(db, "livreurs", livreurId);
       batchPromises.push(

@@ -17,7 +17,7 @@ import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 /**
- * Vérifie si une livraison est considérée comme réussie
+ * Vérifie si une livraison est considérée comme réussie  
  */
 const isDeliverySuccessful = (delivery) => {
   if (delivery.statut === 'livre' || delivery.statut === 'partiel') return true;
