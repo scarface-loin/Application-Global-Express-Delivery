@@ -208,19 +208,80 @@ export const validerSessionLivreur = async ({
       })
     );
 
-    // 4. Gestion Garage
+    // 4. Gestion Garage — avec détails complets de la session
     if (garageRequest && garageRequest.actif) {
+
+      // Résumé des livraisons de la session
+      const livraisonsResume = livraisons.map(liv => {
+        const livrees  = liv.articles.filter(a => parseInt(a.quantiteLivree  || 0) > 0);
+        const retours  = liv.articles.filter(a => parseInt(a.quantiteRetournee || 0) > 0);
+        const perdues  = liv.articles.filter(a => parseInt(a.quantitePerdue  || 0) > 0);
+        return {
+          livraisonId:    liv.id,
+          tracking:       liv.trackingNumber || liv.id,
+          quartier:       liv.quartier || 'N/A',
+          origine:        liv.origine,
+          totalCalcule:   parseFloat(liv.totalCalcule || 0),
+          coutPrestation: parseFloat(liv.coutPrestation || 0),
+          nbArticlesLivres:    livrees.length,
+          nbArticlesRetournes: retours.length,
+          nbArticlesPerdus:    perdues.length,
+          articles: liv.articles.map(a => ({
+            nom:               a.nom || a.designation || 'Article',
+            quantiteCommandee: parseInt(a.quantiteCommandee || 0),
+            quantiteLivree:    parseInt(a.quantiteLivree   || 0),
+            quantiteRetournee: parseInt(a.quantiteRetournee|| 0),
+            quantitePerdue:    parseInt(a.quantitePerdue   || 0),
+            coutUnitaire:      parseFloat(a.coutUnitaire   || 0),
+          }))
+        };
+      });
+
       batchPromises.push(
         addDoc(collection(db, "demandes_garage"), {
+          // ── Identifiants ──────────────────────────────────────────
           livreurId,
           livreurNom,
-          motif: garageRequest.motif,
+          creePar: adminId,
+          statut: 'en_attente',
+          dateCreation: now,
+
+          // ── Motif garage ──────────────────────────────────────────
+          motif:       garageRequest.motif,
           description: garageRequest.description || "Demande créée lors de la validation",
           montantManquant: parseFloat(garageRequest.montantEstime || 0),
           urgence: 'normale',
-          statut: 'en_attente',
-          dateCreation: now,
-          creePar: adminId
+
+          // ── Détails financiers de la session ─────────────────────
+          session: {
+            date:                    now,
+            nbCourses:               livraisons.length,
+
+            // Montants
+            montantTheorique:        parseFloat(montantTheorique),
+            montantRecu:             parseFloat(montantRecu),
+            cashManquant:            parseFloat(cashManquant),
+            montantPerduArticles:    parseFloat(montantPerduArticles),
+            totalDetteAjoutee:       parseFloat(totalDetteAjoutee),
+            montantAttenduFinal:     parseFloat(montantAttenduFinal),
+
+            // Écart
+            ecartCash: parseFloat(montantTheorique) - parseFloat(montantRecu),
+
+            // Notes admin
+            notes: notes || "",
+
+            // Livraisons détaillées
+            livraisons: livraisonsResume,
+
+            // Récap articles globaux
+            totalArticlesLivres:    livraisons.reduce((s, l) =>
+              s + l.articles.filter(a => parseInt(a.quantiteLivree || 0) > 0).length, 0),
+            totalArticlesRetournes: livraisons.reduce((s, l) =>
+              s + l.articles.filter(a => parseInt(a.quantiteRetournee || 0) > 0).length, 0),
+            totalArticlesPerdus:    livraisons.reduce((s, l) =>
+              s + l.articles.filter(a => parseInt(a.quantitePerdue || 0) > 0).length, 0),
+          }
         })
       );
     }

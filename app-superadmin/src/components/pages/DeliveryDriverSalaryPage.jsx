@@ -101,8 +101,8 @@ const DriverDetailsModal = ({ livreur, onClose, selectedPeriod }) => {
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
-                    <div className="bg-blue-50 rounded-2xl p-4"><p className="text-xs text-gray-500 uppercase font-bold mb-1">Période</p><p className="text-lg font-bold">{selectedPeriod}</p></div>
-                    <div className="bg-green-50 rounded-2xl p-4"><p className="text-xs text-gray-500 uppercase font-bold mb-1">Jours travaillés</p><p className="text-lg font-bold">{livreur.joursTravailles}</p></div>
+                    <div className="bg-blue-50 rounded-2xl p-4"><p className="text-xs text-gray-500 uppercase font-bold mb-1">Cycle de paie</p><p className="text-lg font-bold">{livreur.joursCyclePaie} <span className="text-sm font-normal text-gray-500">jours ouvrables</span></p></div>
+                    <div className="bg-green-50 rounded-2xl p-4"><p className="text-xs text-gray-500 uppercase font-bold mb-1">Présence effective</p><p className="text-lg font-bold">{livreur.joursTravailles}<span className="text-sm font-normal text-gray-500"> / {livreur.joursCyclePaie}j</span></p></div>
                     <div className="bg-orange-50 rounded-2xl p-4"><p className="text-xs text-gray-500 uppercase font-bold mb-1">Livraisons</p><p className="text-lg font-bold">{livreur.livraisonsEffectuees}/{livreur.livraisonsTotal}</p></div>
                     <div className="bg-purple-50 rounded-2xl p-4"><p className="text-xs text-gray-500 uppercase font-bold mb-1">Taux de succès</p><p className="text-lg font-bold">{livreur.tauxSucces}%</p></div>
                 </div>
@@ -330,8 +330,11 @@ export default function DeliveryDriverSalaryPage() {
                                     <p className="font-bold text-green-600">{livreur.livraisonsEffectuees}</p>
                                 </div>
                                 <div>
-                                    <p className="text-[9px] text-gray-400 uppercase">Jours</p>
-                                    <p className="font-bold">{livreur.joursTravailles}</p>
+                                    <p className="text-[9px] text-gray-400 uppercase">Cycle</p>
+                                    <p className="font-bold text-indigo-600">
+                                        {livreur.joursTravailles}
+                                        <span className="text-[9px] text-gray-400 font-normal">/{livreur.joursCyclePaie}j</span>
+                                    </p>
                                 </div>
                             </div>
 

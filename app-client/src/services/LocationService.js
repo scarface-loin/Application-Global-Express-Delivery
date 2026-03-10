@@ -1,383 +1,284 @@
-import { getDatabase, ref, set, onDisconnect } from 'firebase/database';
+import { getDatabase, ref, onValue, off } from 'firebase/database';
 
+/**
+ * LocationService - Interface Web Admin
+ * Écoute en temps réel la position d'un ou plusieurs livreurs
+ * depuis Firebase Realtime Database.
+ *
+ * Structure Firebase attendue (écrite par l'app Flutter) :
+ * livreurs_positions/{livreurId} → {
+ *   latitude, longitude, accuracy, speed, heading,
+ *   isActive, lastUpdate, updatedAt, livreurId
+ * }
+ *
+ * livraisons_tracking/{livraisonId}/livreur_position → { ...même structure }
+ */
 class LocationService {
   constructor() {
-    this.watchId = null;
-    this.isTracking = false;
-    this.livreurId = null;
-    this.activeLivraisonsIds = [];
-    this.database = null;
-    this.lastPosition = null;
-    this.updateInterval = null;
-    this.wakeLock = null;
-    this.isPageVisible = true;
-    this.backgroundInterval = null;
-    this.visibilityChangeHandler = null;
+    this.database = getDatabase();
+
+    // Map des listeners actifs : livreurId → unsubscribe function
+    this._livreurListeners = new Map();
+
+    // Map des listeners par livraison : livraisonId → unsubscribe function
+    this._livraisonListeners = new Map();
+
+    // Map des dernières positions connues : livreurId → positionData
+    this._positions = new Map();
   }
 
-  async startTracking(livreurId, livraisonsIds = []) {
-    try {
-      console.log('🚀 Démarrage du suivi GPS pour livreur:', livreurId);
-      console.log('📦 Livraisons actives:', livraisonsIds);
+  // ─────────────────────────────────────────────────────────────
+  // ÉCOUTER UN LIVREUR PAR SON ID
+  // ─────────────────────────────────────────────────────────────
 
-      this.livreurId = livreurId;
-      this.activeLivraisonsIds = livraisonsIds;
-      this.database = getDatabase();
-
-      if (!navigator.geolocation) {
-        throw new Error('La géolocalisation n\'est pas supportée par votre navigateur');
-      }
-
-      const permission = await this.checkPermission();
-      if (!permission) {
-        throw new Error('Permission de géolocalisation refusée');
-      }
-
-      await this.requestWakeLock();
-      this.setupVisibilityHandler();
-      this.startGeolocationWatch();
-      this.startPeriodicUpdates();
-
-      this.isTracking = true;
-      console.log('✅ Suivi GPS activé avec succès');
-      return { success: true };
-
-    } catch (error) {
-      console.error('❌ Erreur démarrage GPS:', error);
-      throw error;
-    }
-  }
-
-  async requestWakeLock() {
-    try {
-      if ('wakeLock' in navigator) {
-        this.wakeLock = await navigator.wakeLock.request('screen');
-        console.log('🔒 Wake Lock activé - L\'écran restera actif');
-
-        this.wakeLock.addEventListener('release', () => {
-          console.log('🔓 Wake Lock libéré');
-        });
-      } else {
-        console.log('⚠️ Wake Lock non supporté sur ce navigateur');
-      }
-    } catch (err) {
-      console.warn('⚠️ Impossible d\'activer Wake Lock:', err);
-    }
-  }
-
-  setupVisibilityHandler() {
-    this.visibilityChangeHandler = () => {
-      if (document.hidden) {
-        console.log('📱 App passée en arrière-plan');
-        this.isPageVisible = false;
-        this.handleBackgroundMode();
-      } else {
-        console.log('📱 App revenue au premier plan');
-        this.isPageVisible = true;
-        this.handleForegroundMode();
-      }
-    };
-
-    document.addEventListener('visibilitychange', this.visibilityChangeHandler);
-
-    window.addEventListener('beforeunload', () => {
-      this.sendFinalUpdate();
-    });
-
-    window.addEventListener('pagehide', () => {
-      this.sendFinalUpdate();
-    });
-  }
-
-  handleBackgroundMode() {
-    console.log('🌙 Mode arrière-plan activé - Augmentation de la fréquence');
-    
-    if (this.updateInterval) {
-      clearInterval(this.updateInterval);
-    }
-
-    this.backgroundInterval = setInterval(() => {
-      if (this.lastPosition) {
-        console.log('🔄 Mise à jour en arrière-plan');
-        this.sendLocationUpdate(this.lastPosition);
-      }
-    }, 5000);
-
-    if (this.lastPosition) {
-      this.sendLocationUpdate(this.lastPosition);
-    }
-  }
-
-  handleForegroundMode() {
-    console.log('☀️ Mode premier plan activé - Retour à la fréquence normale');
-    
-    if (this.backgroundInterval) {
-      clearInterval(this.backgroundInterval);
-      this.backgroundInterval = null;
-    }
-
-    this.startPeriodicUpdates();
-    this.forceUpdate();
-  }
-
-  startGeolocationWatch() {
-    const options = {
-      enableHighAccuracy: true,
-      timeout: 10000,
-      maximumAge: 3000,
-    };
-
-    this.watchId = navigator.geolocation.watchPosition(
-      (position) => this.handlePositionUpdate(position),
-      (error) => this.handleError(error),
-      options
-    );
-  }
-
-  startPeriodicUpdates() {
-    if (this.updateInterval) {
-      clearInterval(this.updateInterval);
-    }
-
-    this.updateInterval = setInterval(() => {
-      if (this.lastPosition && this.isPageVisible) {
-        this.sendLocationUpdate(this.lastPosition);
-      }
-    }, 10000);
-  }
-
-  async checkPermission() {
-    try {
-      if ('permissions' in navigator) {
-        const result = await navigator.permissions.query({ name: 'geolocation' });
-        return result.state === 'granted' || result.state === 'prompt';
-      }
-      return true;
-    } catch (error) {
-      console.warn('Impossible de vérifier les permissions:', error);
-      return true;
-    }
-  }
-
-  handlePositionUpdate(position) {
-    const coords = position.coords;
-    
-    this.lastPosition = {
-      latitude: coords.latitude,
-      longitude: coords.longitude,
-      accuracy: coords.accuracy,
-      speed: coords.speed || 0,
-      heading: coords.heading || 0,
-      timestamp: position.timestamp,
-      updatedAt: new Date().toISOString(),
-      isBackground: !this.isPageVisible,
-    };
-
-    console.log('📍 Nouvelle position:', {
-      lat: coords.latitude.toFixed(6),
-      lng: coords.longitude.toFixed(6),
-      accuracy: `${coords.accuracy.toFixed(0)}m`,
-      background: !this.isPageVisible,
-    });
-
-    this.sendLocationUpdate(this.lastPosition);
-  }
-
-  async sendLocationUpdate(locationData) {
-    if (!this.database || !this.livreurId) {
-      console.warn('⚠️ Base de données ou livreurId non initialisé');
+  /**
+   * Démarre l'écoute temps réel de la position d'un livreur.
+   *
+   * @param {string} livreurId - L'ID du livreur dans Firebase
+   * @param {function} onPositionUpdate - Callback appelé à chaque mise à jour
+   *   Reçoit : { livreurId, latitude, longitude, accuracy, speed,
+   *              heading, isActive, lastUpdate, updatedAt }
+   * @param {function} onError - Callback en cas d'erreur (optionnel)
+   */
+  watchLivreur(livreurId, onPositionUpdate, onError = null) {
+    if (!livreurId) {
+      console.warn('⚠️ watchLivreur: livreurId manquant');
       return;
     }
 
-    try {
-      const timestamp = Date.now();
+    // Si un listener existe déjà pour ce livreur, on le stoppe d'abord
+    this.unwatchLivreur(livreurId);
 
-      const livreurLocationRef = ref(this.database, `livreurs_positions/${this.livreurId}`);
-      await set(livreurLocationRef, {
-        ...locationData,
-        livreurId: this.livreurId,
-        isActive: true,
-        lastUpdate: timestamp,
-      });
+    console.log(`👁️ Écoute démarrée pour livreur: ${livreurId}`);
 
-      for (const livraisonId of this.activeLivraisonsIds) {
-        const livraisonLocationRef = ref(
-          this.database,
-          `livraisons_tracking/${livraisonId}/livreur_position`
-        );
+    const livreurRef = ref(this.database, `livreurs_positions/${livreurId}`);
 
-        await set(livraisonLocationRef, {
-          ...locationData,
-          livreurId: this.livreurId,
-          livraisonId: livraisonId,
-          lastUpdate: timestamp,
+    const unsubscribe = onValue(
+      livreurRef,
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          console.log(`ℹ️ Aucune position disponible pour livreur: ${livreurId}`);
+          onPositionUpdate({
+            livreurId,
+            isActive: false,
+            latitude: null,
+            longitude: null,
+            lastUpdate: null,
+          });
+          return;
+        }
+
+        const data = snapshot.val();
+
+        const position = {
+          livreurId,
+          latitude: data.latitude ?? null,
+          longitude: data.longitude ?? null,
+          accuracy: data.accuracy ?? null,
+          speed: data.speed ?? 0,
+          heading: data.heading ?? 0,
+          isActive: data.isActive === true,
+          lastUpdate: data.lastUpdate ?? null,
+          updatedAt: data.updatedAt ?? null,
+        };
+
+        // Mettre à jour le cache interne
+        this._positions.set(livreurId, position);
+
+        console.log(`📍 Position reçue [${livreurId}]:`, {
+          lat: position.latitude?.toFixed(6),
+          lng: position.longitude?.toFixed(6),
+          précision: position.accuracy ? `±${Math.round(position.accuracy)}m` : 'N/A',
+          actif: position.isActive,
+          vitesse: position.speed ? `${(position.speed * 3.6).toFixed(1)} km/h` : '0 km/h',
         });
 
-        onDisconnect(livraisonLocationRef).remove();
+        onPositionUpdate(position);
+      },
+      (error) => {
+        console.error(`❌ Erreur écoute position [${livreurId}]:`, error);
+        if (onError) onError(error);
       }
+    );
 
-      onDisconnect(livreurLocationRef).set({
-        livreurId: this.livreurId,
-        isActive: false,
-        lastUpdate: timestamp,
-      });
+    // Stocker la fonction d'arrêt
+    this._livreurListeners.set(livreurId, unsubscribe);
+  }
 
-      const bgMarker = locationData.isBackground ? '(arrière-plan)' : '';
-      console.log(`✅ Position envoyée ${bgMarker} pour ${this.activeLivraisonsIds.length} livraison(s)`);
-
-    } catch (error) {
-      console.error('❌ Erreur envoi position:', error);
+  /**
+   * Arrête l'écoute de la position d'un livreur.
+   * @param {string} livreurId
+   */
+  unwatchLivreur(livreurId) {
+    if (this._livreurListeners.has(livreurId)) {
+      const unsubscribe = this._livreurListeners.get(livreurId);
+      unsubscribe(); // Détache le listener Firebase
+      this._livreurListeners.delete(livreurId);
+      this._positions.delete(livreurId);
+      console.log(`🔕 Écoute arrêtée pour livreur: ${livreurId}`);
     }
   }
 
-  sendFinalUpdate() {
-    if (this.lastPosition && this.database && this.livreurId) {
-      const livreurLocationRef = ref(this.database, `livreurs_positions/${this.livreurId}`);
-      
-      navigator.sendBeacon(
-        'https://app-global-express-delivery-default-rtdb.firebaseio.com/livreurs_positions/' + 
-        this.livreurId + '.json',
-        JSON.stringify({
-          ...this.lastPosition,
-          livreurId: this.livreurId,
-          isActive: false,
-          lastUpdate: Date.now(),
-        })
-      );
-      
-      console.log('📤 Mise à jour finale envoyée via sendBeacon');
-    }
-  }
+  // ─────────────────────────────────────────────────────────────
+  // ÉCOUTER PLUSIEURS LIVREURS EN MÊME TEMPS
+  // ─────────────────────────────────────────────────────────────
 
-  handleError(error) {
-    let errorMessage = '';
-    
-    switch (error.code) {
-      case error.PERMISSION_DENIED:
-        errorMessage = 'Permission de géolocalisation refusée';
-        break;
-      case error.POSITION_UNAVAILABLE:
-        errorMessage = 'Position indisponible';
-        break;
-      case error.TIMEOUT:
-        errorMessage = 'Délai de géolocalisation dépassé';
-        break;
-      default:
-        errorMessage = 'Erreur de géolocalisation inconnue';
-    }
-
-    console.error('❌ Erreur GPS:', errorMessage, error);
-  }
-
-  updateActiveLivraisons(livraisonsIds) {
-    console.log('🔄 Mise à jour des livraisons actives:', livraisonsIds);
-    
-    const removedIds = this.activeLivraisonsIds.filter(id => !livraisonsIds.includes(id));
-    
-    for (const livraisonId of removedIds) {
-      this.removeTrackingForLivraison(livraisonId);
-    }
-
-    this.activeLivraisonsIds = livraisonsIds;
-
-    if (this.lastPosition) {
-      this.sendLocationUpdate(this.lastPosition);
-    }
-  }
-
-  async removeTrackingForLivraison(livraisonId) {
-    if (!this.database) return;
-
-    try {
-      const livraisonLocationRef = ref(
-        this.database,
-        `livraisons_tracking/${livraisonId}`
-      );
-      await set(livraisonLocationRef, null);
-      console.log(`🗑️ Suivi supprimé pour livraison: ${livraisonId}`);
-    } catch (error) {
-      console.error('Erreur suppression tracking:', error);
-    }
-  }
-
-  async stopTracking() {
-    console.log('🛑 Arrêt du suivi GPS');
-
-    if (this.watchId) {
-      navigator.geolocation.clearWatch(this.watchId);
-      this.watchId = null;
-    }
-
-    if (this.updateInterval) {
-      clearInterval(this.updateInterval);
-      this.updateInterval = null;
-    }
-
-    if (this.backgroundInterval) {
-      clearInterval(this.backgroundInterval);
-      this.backgroundInterval = null;
-    }
-
-    if (this.wakeLock) {
-      try {
-        await this.wakeLock.release();
-        this.wakeLock = null;
-      } catch (err) {
-        console.warn('Erreur libération Wake Lock:', err);
-      }
-    }
-
-    if (this.visibilityChangeHandler) {
-      document.removeEventListener('visibilitychange', this.visibilityChangeHandler);
-      this.visibilityChangeHandler = null;
-    }
-
-    if (this.database && this.livreurId) {
-      const livreurLocationRef = ref(this.database, `livreurs_positions/${this.livreurId}`);
-      await set(livreurLocationRef, {
-        livreurId: this.livreurId,
-        isActive: false,
-        lastUpdate: Date.now(),
-      });
-
-      for (const livraisonId of this.activeLivraisonsIds) {
-        await this.removeTrackingForLivraison(livraisonId);
-      }
-    }
-
-    this.isTracking = false;
-    this.lastPosition = null;
-    this.activeLivraisonsIds = [];
-    
-    console.log('✅ Suivi GPS arrêté');
-  }
-
-  getLastPosition() {
-    return this.lastPosition;
-  }
-
-  isActive() {
-    return this.isTracking;
-  }
-
-  forceUpdate() {
-    if (!this.isTracking) {
-      console.warn('⚠️ Le suivi GPS n\'est pas actif');
+  /**
+   * Écoute plusieurs livreurs simultanément.
+   *
+   * @param {string[]} livreurIds - Liste des IDs livreurs
+   * @param {function} onPositionUpdate - Callback appelé pour chaque mise à jour
+   *   Reçoit la position d'UN livreur à la fois (voir watchLivreur)
+   * @param {function} onError - Callback erreur (optionnel)
+   */
+  watchMultipleLivreurs(livreurIds, onPositionUpdate, onError = null) {
+    if (!Array.isArray(livreurIds) || livreurIds.length === 0) {
+      console.warn('⚠️ watchMultipleLivreurs: liste vide ou invalide');
       return;
     }
 
-    navigator.geolocation.getCurrentPosition(
-      (position) => this.handlePositionUpdate(position),
-      (error) => this.handleError(error),
-      {
-        enableHighAccuracy: true,
-        timeout: 10000,
-        maximumAge: 0,
+    console.log(`👁️ Écoute de ${livreurIds.length} livreur(s):`, livreurIds);
+
+    for (const livreurId of livreurIds) {
+      this.watchLivreur(livreurId, onPositionUpdate, onError);
+    }
+  }
+
+  /**
+   * Arrête l'écoute de tous les livreurs.
+   */
+  unwatchAll() {
+    console.log(`🔕 Arrêt de tous les listeners (${this._livreurListeners.size} livreur(s))`);
+    for (const livreurId of this._livreurListeners.keys()) {
+      this.unwatchLivreur(livreurId);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // ÉCOUTER PAR LIVRAISON
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Écoute la position du livreur associé à une livraison spécifique.
+   *
+   * @param {string} livraisonId
+   * @param {function} onPositionUpdate
+   * @param {function} onError
+   */
+  watchLivraison(livraisonId, onPositionUpdate, onError = null) {
+    if (!livraisonId) return;
+
+    this.unwatchLivraison(livraisonId);
+
+    console.log(`👁️ Écoute démarrée pour livraison: ${livraisonId}`);
+
+    const livraisonRef = ref(
+      this.database,
+      `livraisons_tracking/${livraisonId}/livreur_position`
+    );
+
+    const unsubscribe = onValue(
+      livraisonRef,
+      (snapshot) => {
+        if (!snapshot.exists()) {
+          onPositionUpdate({
+            livraisonId,
+            isActive: false,
+            latitude: null,
+            longitude: null,
+            lastUpdate: null,
+          });
+          return;
+        }
+
+        const data = snapshot.val();
+
+        const position = {
+          livraisonId,
+          livreurId: data.livreurId ?? null,
+          latitude: data.latitude ?? null,
+          longitude: data.longitude ?? null,
+          accuracy: data.accuracy ?? null,
+          speed: data.speed ?? 0,
+          heading: data.heading ?? 0,
+          isActive: data.isActive === true,
+          lastUpdate: data.lastUpdate ?? null,
+          updatedAt: data.updatedAt ?? null,
+        };
+
+        console.log(`📍 Position reçue [livraison: ${livraisonId}]:`, {
+          lat: position.latitude?.toFixed(6),
+          lng: position.longitude?.toFixed(6),
+          actif: position.isActive,
+        });
+
+        onPositionUpdate(position);
+      },
+      (error) => {
+        console.error(`❌ Erreur écoute livraison [${livraisonId}]:`, error);
+        if (onError) onError(error);
       }
     );
+
+    this._livraisonListeners.set(livraisonId, unsubscribe);
+  }
+
+  /**
+   * Arrête l'écoute d'une livraison.
+   * @param {string} livraisonId
+   */
+  unwatchLivraison(livraisonId) {
+    if (this._livraisonListeners.has(livraisonId)) {
+      const unsubscribe = this._livraisonListeners.get(livraisonId);
+      unsubscribe();
+      this._livraisonListeners.delete(livraisonId);
+      console.log(`🔕 Écoute livraison arrêtée: ${livraisonId}`);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // UTILITAIRES
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Retourne la dernière position connue d'un livreur (depuis le cache).
+   * @param {string} livreurId
+   * @returns {object|null}
+   */
+  getLastPosition(livreurId) {
+    return this._positions.get(livreurId) ?? null;
+  }
+
+  /**
+   * Retourne toutes les positions connues.
+   * @returns {Map<string, object>}
+   */
+  getAllPositions() {
+    return this._positions;
+  }
+
+  /**
+   * Vérifie si un livreur est actuellement actif (GPS allumé).
+   * @param {string} livreurId
+   * @returns {boolean}
+   */
+  isLivreurActive(livreurId) {
+    const pos = this._positions.get(livreurId);
+    return pos?.isActive === true;
+  }
+
+  /**
+   * Retourne le nombre de secondes depuis la dernière mise à jour GPS.
+   * @param {string} livreurId
+   * @returns {number|null}
+   */
+  getSecondsSinceLastUpdate(livreurId) {
+    const pos = this._positions.get(livreurId);
+    if (!pos?.lastUpdate) return null;
+    return Math.floor((Date.now() - pos.lastUpdate) / 1000);
   }
 }
 
+// Instance singleton exportée
 const locationService = new LocationService();
-
 export default locationService;

@@ -1,15 +1,11 @@
 import { db } from '../../../services/firebase';
-import { collection, getDocs, query, orderBy, deleteDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 
 /**
  * Récupère les livraisons actives (non validées/archivées)
- * @returns {Promise<Array>} Liste formatée des livraisons  
  */
 export const fetchActiveDeliveries = async () => {
   try {
-    // 1. Récupérer les deux collections
-    // Note : orderBy nécessite parfois un index composite. 
-    // Si ça plante, enlève orderBy temporairement ou crée l'index dans Firebase Console.
     const qInterne = query(collection(db, "livraisons"), orderBy("dateCreation", "desc"));
     const qPartenaire = query(collection(db, "livraison_partenaire"), orderBy("dateCreation", "desc"));
 
@@ -22,15 +18,14 @@ export const fetchActiveDeliveries = async () => {
 
     const processData = (doc, source) => {
       const data = doc.data();
-      // On ignore si validé (archivé)
-      if (data.dateValidation || data.statut === 'livre' || data.statut === 'facture_validee') return; 
+      if (data.dateValidation || data.statut === 'livre' || data.statut === 'facture_validee') return;
 
       const quartierOuVille = data.infosLivraison?.quartier || data.infosLivraison?.villeDestination || 'Destination inconnue';
       const contact = data.infosLivraison?.numeroDestinataire || data.infosLivraison?.contactClient || '';
 
       deliveries.push({
         id: doc.id,
-        source: source, // Pour info
+        source,
         trackingNumber: data.numeroSuivi,
         type: data.type,
         status: data.statut,
@@ -48,7 +43,6 @@ export const fetchActiveDeliveries = async () => {
     snapInterne.forEach(d => processData(d, 'interne'));
     snapPartenaire.forEach(d => processData(d, 'partenaire'));
 
-    // Tri manuel final (JavaScript) pour être sûr de l'ordre après fusion
     return deliveries.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
   } catch (error) {
@@ -58,8 +52,7 @@ export const fetchActiveDeliveries = async () => {
 };
 
 /**
- * Supprime une livraison (Cas d'erreur de saisie)
- * @param {string} deliveryId 
+ * Supprime une livraison
  */
 export const deleteDeliveryFromFirebase = async (deliveryId) => {
   try {
@@ -68,5 +61,36 @@ export const deleteDeliveryFromFirebase = async (deliveryId) => {
   } catch (error) {
     console.error("Erreur lors de la suppression :", error);
     throw new Error("Erreur lors de la suppression");
+  }
+};
+
+/**
+ * Met à jour une livraison avant validation
+ * @param {string} deliveryId - ID du document Firestore
+ * @param {string} source - 'interne' | 'partenaire'
+ * @param {object} updatedData - Champs modifiés par l'admin
+ */
+export const updateDelivery = async (deliveryId, source, updatedData) => {
+  try {
+    // Choisir la bonne collection selon la source
+    const collectionName = source === 'partenaire' ? 'livraison_partenaire' : 'livraisons';
+    const docRef = doc(db, collectionName, deliveryId);
+
+    // Mapper les champs du composant vers la structure Firestore
+    const firestorePayload = {
+      statut: updatedData.status,
+      coutPrestation: updatedData.coutLivraison,
+      totalGeneral: updatedData.total,
+      articles: updatedData.articles,
+      // Mise à jour des infos de livraison imbriquées
+      "infosLivraison.quartier": updatedData.quartier,
+      "infosLivraison.numeroDestinataire": updatedData.numeroDestinataire,
+    };
+
+    await updateDoc(docRef, firestorePayload);
+    return true;
+  } catch (error) {
+    console.error("Erreur lors de la mise à jour :", error);
+    throw new Error("Impossible de sauvegarder les modifications.");
   }
 };

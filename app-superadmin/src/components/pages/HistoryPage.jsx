@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { 
   FiSearch, FiPackage, FiEye, FiFilter, FiX, FiUser, 
-  FiCalendar, FiCheckCircle, FiSlash, FiDownload, FiAlertTriangle 
+  FiCalendar, FiCheckCircle, FiSlash, FiDownload, FiAlertTriangle,
+  FiEdit2, FiSave, FiRefreshCw, FiPlus, FiMinus, FiShield
 } from 'react-icons/fi';
-import { fetchHistory, generatePDFReport } from './logic/HistoryPageLogic';
+import { fetchHistory, generatePDFReport, updateHistoryDelivery } from './logic/HistoryPageLogic';
 
 export default function HistoryPage() {
   const [deliveries, setDeliveries] = useState([]);
@@ -11,8 +12,6 @@ export default function HistoryPage() {
   const [error, setError] = useState('');
   const [generatingPDF, setGeneratingPDF] = useState(false);
 
-  // --- CORRECTION: Logique de date pour éviter les problèmes de fuseau horaire ---
-  // Cette fonction garantit que l'on obtient la date locale au format YYYY-MM-DD
   const getLocalDateString = (date) => {
     const offset = date.getTimezoneOffset();
     const localDate = new Date(date.getTime() - (offset * 60 * 1000));
@@ -23,16 +22,21 @@ export default function HistoryPage() {
   const today = getLocalDateString(now);
   const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const startOfMonth = getLocalDateString(firstDayOfMonth);
-  // --- FIN CORRECTION ---
 
   const [filters, setFilters] = useState({
     search: '',
     statut: '',
-    startDate: startOfMonth, // Utilise la valeur corrigée
-    endDate: today,          // Utilise la valeur corrigée
+    startDate: startOfMonth,
+    endDate: today,
   });
 
   const [selectedDelivery, setSelectedDelivery] = useState(null);
+
+  // --- EDIT STATE ---
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingDelivery, setEditingDelivery] = useState(null);
+  const [editForm, setEditForm] = useState({});
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const loadData = async () => {
@@ -93,27 +97,21 @@ export default function HistoryPage() {
   };
 
   const renderArticleStatus = (art) => {
-    if (art.quantitePerdue > 0) {
-      return (
-        <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 border border-red-200">
-          <FiAlertTriangle className="mr-1" /> PERDU ({art.quantitePerdue})
-        </span>
-      );
-    }
-    if (art.quantiteRetournee > 0) {
-      return (
-        <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 border border-orange-200">
-          <FiSlash className="mr-1" /> RETOURNÉ ({art.quantiteRetournee})
-        </span>
-      );
-    }
-    if (art.quantiteRejetee > 0) {
-      return (
-        <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-800 border border-gray-300">
-          REJETÉ ({art.quantiteRejetee})
-        </span>
-      );
-    }
+    if (art.quantitePerdue > 0) return (
+      <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-800 border border-red-200">
+        <FiAlertTriangle className="mr-1" /> PERDU ({art.quantitePerdue})
+      </span>
+    );
+    if (art.quantiteRetournee > 0) return (
+      <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-orange-100 text-orange-800 border border-orange-200">
+        <FiSlash className="mr-1" /> RETOURNÉ ({art.quantiteRetournee})
+      </span>
+    );
+    if (art.quantiteRejetee > 0) return (
+      <span className="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-200 text-gray-800 border border-gray-300">
+        REJETÉ ({art.quantiteRejetee})
+      </span>
+    );
     if (art.quantiteLivree > 0) {
       const isPartial = art.quantiteLivree < art.quantiteCommandee;
       return (
@@ -127,20 +125,100 @@ export default function HistoryPage() {
 
   const filteredDeliveries = deliveries.filter(delivery => {
     const search = filters.search.toLowerCase();
-    const tNumber = delivery.trackingNumber || '';
-    const quartier = delivery.quartier || '';
-    const livreur = delivery.livreurNom || '';
-    
     return (
-      tNumber.toLowerCase().includes(search) ||
-      quartier.toLowerCase().includes(search) ||
-      livreur.toLowerCase().includes(search)
+      (delivery.trackingNumber || '').toLowerCase().includes(search) ||
+      (delivery.quartier || '').toLowerCase().includes(search) ||
+      (delivery.livreurNom || '').toLowerCase().includes(search)
     );
   });
 
   const totalPeriodRevenue = filteredDeliveries
     .filter(d => d.statut === 'delivered' || d.statut === 'valide' || d.statut === 'livre')
     .reduce((acc, curr) => acc + (curr.total || 0), 0);
+
+  // --- EDIT HANDLERS ---
+  const recalculateTotal = (articles, coutLivraison) => {
+    const articlesTotal = (articles || []).reduce((sum, art) => {
+      return sum + ((art.quantiteCommandee || 0) * (art.coutUnitaire || 0));
+    }, 0);
+    return articlesTotal + (Number(coutLivraison) || 0);
+  };
+
+  const openEditModal = (delivery) => {
+    setEditingDelivery(delivery);
+    setEditForm({
+      statut: delivery.rawStatus || delivery.statut || '',
+      quartier: delivery.quartier || '',
+      numeroDestinataire: delivery.numeroDestinataire || '',
+      coutLivraison: delivery.coutLivraison || 0,
+      livreurNom: delivery.livreurNom || '',
+      articles: (delivery.articles || []).map(a => ({ ...a })),
+    });
+    setShowEditModal(true);
+  };
+
+  const handleEditField = (field, value) => {
+    setEditForm(prev => {
+      const updated = { ...prev, [field]: value };
+      updated.total = recalculateTotal(updated.articles, updated.coutLivraison);
+      return updated;
+    });
+  };
+
+  const handleArticleChange = (index, field, value) => {
+    setEditForm(prev => {
+      const articles = prev.articles.map((art, i) =>
+        i === index ? { ...art, [field]: field === 'nom' ? value : Number(value) } : art
+      );
+      return { ...prev, articles, total: recalculateTotal(articles, prev.coutLivraison) };
+    });
+  };
+
+  const handleAddArticle = () => {
+    setEditForm(prev => {
+      const articles = [...prev.articles, { nom: '', quantiteCommandee: 1, coutUnitaire: 0 }];
+      return { ...prev, articles, total: recalculateTotal(articles, prev.coutLivraison) };
+    });
+  };
+
+  const handleRemoveArticle = (index) => {
+    setEditForm(prev => {
+      const articles = prev.articles.filter((_, i) => i !== index);
+      return { ...prev, articles, total: recalculateTotal(articles, prev.coutLivraison) };
+    });
+  };
+
+  const handleSaveEdit = async () => {
+    setSaving(true);
+    try {
+      const newTotal = recalculateTotal(editForm.articles, editForm.coutLivraison);
+      const updatedData = {
+        statut: editForm.statut,
+        quartier: editForm.quartier,
+        numeroDestinataire: editForm.numeroDestinataire,
+        coutLivraison: Number(editForm.coutLivraison),
+        livreurNom: editForm.livreurNom,
+        articles: editForm.articles,
+        total: newTotal,
+      };
+
+      await updateHistoryDelivery(editingDelivery.id, editingDelivery.origine, updatedData);
+
+      // Mise à jour locale immédiate
+      setDeliveries(prev => prev.map(d =>
+        d.id === editingDelivery.id ? { ...d, ...updatedData, rawStatus: editForm.statut } : d
+      ));
+
+      setShowEditModal(false);
+      setEditingDelivery(null);
+    } catch (err) {
+      alert("Erreur lors de la sauvegarde : " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const computedTotal = recalculateTotal(editForm.articles, editForm.coutLivraison);
 
   return (
     <div className="min-h-screen bg-gray-50 pb-6">
@@ -152,6 +230,7 @@ export default function HistoryPage() {
             <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
               <FiCalendar className="text-blue-600" />
               Historique des Courses
+
             </h2>
             <div className="flex items-center gap-3">
               <div className="bg-blue-50 px-4 py-2 rounded-lg text-right hidden sm:block">
@@ -164,13 +243,14 @@ export default function HistoryPage() {
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors font-medium text-sm"
               >
                 <FiDownload />
-                {generatingPDF ? 'Génération...' : 'Rapport PDF'}
+                {generatingPDF ? 'PDF...' : 'Export PDF'}
               </button>
             </div>
           </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="relative">
-              <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <FiSearch className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={16} />
               <input type="text" placeholder="Rechercher..." value={filters.search} onChange={(e) => setFilters({...filters, search: e.target.value})} className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:border-blue-500 outline-none"/>
             </div>
             <select value={filters.statut} onChange={(e) => setFilters({...filters, statut: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:border-blue-500 outline-none bg-white">
@@ -179,12 +259,8 @@ export default function HistoryPage() {
               <option value="partiel">Partielles</option>
               <option value="cancelled">Échecs / Annulées</option>
             </select>
-            <div className="relative">
-              <input type="date" value={filters.startDate} onChange={(e) => setFilters({...filters, startDate: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"/>
-            </div>
-            <div className="relative">
-              <input type="date" value={filters.endDate} onChange={(e) => setFilters({...filters, endDate: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"/>
-            </div>
+            <input type="date" value={filters.startDate} onChange={(e) => setFilters({...filters, startDate: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"/>
+            <input type="date" value={filters.endDate} onChange={(e) => setFilters({...filters, endDate: e.target.value})} className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"/>
           </div>
         </div>
       </div>
@@ -204,7 +280,6 @@ export default function HistoryPage() {
           <div className="grid gap-3">
             {filteredDeliveries.map((delivery) => {
               const statusInfo = getStatusInfo(delivery.statut);
-              
               return (
                 <div key={delivery.id} className="bg-white rounded-xl shadow-sm p-4 flex flex-col sm:flex-row gap-4 items-start sm:items-center hover:shadow-md transition-shadow">
                   <div className="flex-1 grid grid-cols-1 sm:grid-cols-3 gap-4 w-full items-center">
@@ -215,7 +290,6 @@ export default function HistoryPage() {
                         {delivery.origine === 'interne' ? 'Interne' : 'Partenaire'}
                       </p>
                     </div>
-
                     <div className="hidden sm:block">
                       {delivery.livreurNom ? (
                         <div className="flex items-center gap-1 text-sm font-medium text-gray-700">
@@ -225,21 +299,28 @@ export default function HistoryPage() {
                         <span className="text-xs text-gray-400">-</span>
                       )}
                     </div>
-
                     <div className="text-left sm:text-right">
-                       <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${statusInfo.color} mb-1`}>
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${statusInfo.color} mb-1`}>
                         {statusInfo.icon} {statusInfo.label}
                       </span>
-                      <p className="font-bold text-gray-900">
-                        {formatAmount(delivery.total)}
-                      </p>
+                      <p className="font-bold text-gray-900">{formatAmount(delivery.total)}</p>
                     </div>
                   </div>
 
-                  <div className="w-full sm:w-auto mt-2 sm:mt-0">
-                    <button onClick={() => setSelectedDelivery(delivery)} className="w-full flex items-center justify-center gap-2 px-4 py-2 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 text-sm font-medium transition-colors">
+                  {/* Boutons actions */}
+                  <div className="w-full sm:w-auto flex gap-2">
+                    <button
+                      onClick={() => setSelectedDelivery(delivery)}
+                      className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50 text-sm font-medium transition-colors"
+                    >
                       <FiEye /> Détails
                     </button>
+                    <button
+                        onClick={() => openEditModal(delivery)}
+                        className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-4 py-2 bg-purple-50 text-purple-700 border border-purple-200 rounded-lg hover:bg-purple-100 text-sm font-medium transition-colors"
+                      >
+                        <FiEdit2 size={14} /> Modifier
+                      </button>
                   </div>
                 </div>
               );
@@ -248,12 +329,10 @@ export default function HistoryPage() {
         )}
       </div>
 
-      {/* --- Modal Détails --- */}
+      {/* ===================== MODAL DÉTAILS ===================== */}
       {selectedDelivery && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 animate-fade-in">
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl flex flex-col">
-            
-            {/* Header Modal */}
             <div className="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center z-10">
               <div>
                 <h2 className="text-xl font-bold text-gray-800">Détails de la course</h2>
@@ -263,76 +342,240 @@ export default function HistoryPage() {
                 <FiX size={24} />
               </button>
             </div>
-            
-            {/* Body Modal */}
             <div className="p-6 space-y-6">
-              
-              {/* Statut Global */}
               <div className="flex justify-between items-center bg-gray-50 p-4 rounded-xl border border-gray-100">
-                 <div>
-                    <p className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1">Statut final</p>
-                    <div className={`flex items-center gap-2 text-lg font-bold ${getStatusInfo(selectedDelivery.statut).color.split(' ')[1]}`}>
-                      {getStatusInfo(selectedDelivery.statut).icon}
-                      {getStatusInfo(selectedDelivery.statut).label.toUpperCase()}
-                    </div>
-                 </div>
-                 <div className="text-right">
-                    <p className="text-xs text-gray-500 mb-1">Date de fin</p>
-                    <p className="text-sm font-semibold text-gray-800">{formatDate(selectedDelivery.dateFin)}</p>
-                 </div>
+                <div>
+                  <p className="text-xs text-gray-500 uppercase font-bold tracking-wider mb-1">Statut final</p>
+                  <div className={`flex items-center gap-2 text-lg font-bold ${getStatusInfo(selectedDelivery.statut).color.split(' ')[1]}`}>
+                    {getStatusInfo(selectedDelivery.statut).icon}
+                    {getStatusInfo(selectedDelivery.statut).label.toUpperCase()}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className="text-xs text-gray-500 mb-1">Date de fin</p>
+                  <p className="text-sm font-semibold text-gray-800">{formatDate(selectedDelivery.dateFin)}</p>
+                </div>
               </div>
-
-              {/* Infos Destination */}
               <div className="grid grid-cols-2 gap-4">
                 <div className="p-3 border rounded-xl">
-                   <h3 className="text-xs text-gray-500 uppercase font-bold mb-2">Destination</h3>
-                   <p className="text-sm font-medium text-gray-900">{selectedDelivery.quartier}</p>
+                  <h3 className="text-xs text-gray-500 uppercase font-bold mb-2">Destination</h3>
+                  <p className="text-sm font-medium text-gray-900">{selectedDelivery.quartier}</p>
                 </div>
                 <div className="p-3 border rounded-xl">
-                   <h3 className="text-xs text-gray-500 uppercase font-bold mb-2">Client</h3>
-                   <p className="text-sm font-medium text-gray-900">{selectedDelivery.numeroDestinataire || 'N/A'}</p>
+                  <h3 className="text-xs text-gray-500 uppercase font-bold mb-2">Client</h3>
+                  <p className="text-sm font-medium text-gray-900">{selectedDelivery.numeroDestinataire || 'N/A'}</p>
                 </div>
               </div>
-
-              {/* Liste des Articles */}
               <div>
-                <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-                  <FiPackage /> Contenu & Statut
-                </h3>
+                <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2"><FiPackage /> Contenu & Statut</h3>
                 <div className="bg-white border rounded-xl overflow-hidden shadow-sm">
-                   {selectedDelivery.articles.map((art, idx) => (
-                     <div key={idx} className="flex justify-between items-center p-3 border-b last:border-0 hover:bg-gray-50 transition-colors">
-                       <div className="flex-1">
-                         <div className="flex items-center flex-wrap gap-1">
-                            <span className="font-bold text-gray-900 mr-1">{art.quantiteCommandee}x</span>
-                            <span className="text-sm text-gray-700 mr-2">{art.nom}</span>
-                            {renderArticleStatus(art)}
-                         </div>
-                       </div>
-                       <div className="text-right min-w-[80px]">
-                         <span className="text-sm font-medium text-gray-600">
-                           {formatAmount(art.totalLignePrevu || (art.coutUnitaire * art.quantiteCommandee))}
-                         </span>
-                       </div>
-                     </div>
-                   ))}
-                   
-                   <div className="p-3 flex justify-between items-center bg-gray-50 text-sm">
-                      <span className="text-gray-600">Coût Livraison</span>
-                      <span className="font-medium">{formatAmount(selectedDelivery.coutLivraison)}</span>
-                   </div>
+                  {selectedDelivery.articles.map((art, idx) => (
+                    <div key={idx} className="flex justify-between items-center p-3 border-b last:border-0 hover:bg-gray-50 transition-colors">
+                      <div className="flex-1">
+                        <div className="flex items-center flex-wrap gap-1">
+                          <span className="font-bold text-gray-900 mr-1">{art.quantiteCommandee}x</span>
+                          <span className="text-sm text-gray-700 mr-2">{art.nom}</span>
+                          {renderArticleStatus(art)}
+                        </div>
+                      </div>
+                      <div className="text-right min-w-[80px]">
+                        <span className="text-sm font-medium text-gray-600">
+                          {formatAmount(art.totalLignePrevu || (art.coutUnitaire * art.quantiteCommandee))}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                  <div className="p-3 flex justify-between items-center bg-gray-50 text-sm">
+                    <span className="text-gray-600">Coût Livraison</span>
+                    <span className="font-medium">{formatAmount(selectedDelivery.coutLivraison)}</span>
+                  </div>
                 </div>
               </div>
-
-              {/* Total Final */}
               <div className="flex justify-between items-center pt-4 border-t-2 border-dashed border-gray-200">
                 <span className="text-lg font-bold text-gray-800">Total Général</span>
                 <span className="text-2xl font-bold text-blue-700">{formatAmount(selectedDelivery.total)}</span>
               </div>
+
+              <button
+                  onClick={() => { setSelectedDelivery(null); openEditModal(selectedDelivery); }}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 bg-purple-600 text-white rounded-xl font-medium hover:bg-purple-700 transition-colors"
+                >
+                  <FiEdit2 size={16} /> Modifier cette course
+                </button>
             </div>
           </div>
         </div>
       )}
+
+      {/* ===================== MODAL MODIFIER (SUPER ADMIN) ===================== */}
+      {showEditModal && editingDelivery && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl">
+
+            {/* Header */}
+            <div className="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center z-10 rounded-t-2xl">
+              <div>
+                <div className="flex items-center gap-2">
+                  <FiShield className="text-purple-600" size={18} />
+                  <h2 className="text-lg font-bold text-gray-800">Modification Super Admin</h2>
+                </div>
+                <p className="text-xs text-gray-400 font-mono mt-0.5">{editingDelivery.trackingNumber}</p>
+              </div>
+              <button onClick={() => setShowEditModal(false)} className="p-2 hover:bg-gray-100 rounded-full text-gray-500">
+                <FiX size={22} />
+              </button>
+            </div>
+
+            {/* Bannière avertissement */}
+            <div className="mx-6 mt-4 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-xl p-3">
+              <FiAlertTriangle className="text-amber-500 flex-shrink-0 mt-0.5" size={16} />
+              <p className="text-xs text-amber-800 font-medium">
+                Vous modifiez une course déjà validée. Ces changements seront enregistrés dans Firebase et affecteront les rapports.
+              </p>
+            </div>
+
+            <div className="p-6 space-y-5">
+
+              {/* Statut */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Statut</label>
+                <select
+                  value={editForm.statut}
+                  onChange={(e) => handleEditField('statut', e.target.value)}
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:border-purple-400 focus:outline-none text-sm"
+                >
+                  <option value="valide">Validée</option>
+                  <option value="livre">Livrée</option>
+                  <option value="delivered">Livrée / Validée</option>
+                  <option value="partiel">Partielle</option>
+                  <option value="non_livre">Non livrée</option>
+                  <option value="annule">Annulée</option>
+                  <option value="echec">Échec</option>
+                </select>
+              </div>
+
+              {/* Destination */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Destination / Quartier</label>
+                <input
+                  type="text"
+                  value={editForm.quartier}
+                  onChange={(e) => handleEditField('quartier', e.target.value)}
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:border-purple-400 focus:outline-none text-sm"
+                />
+              </div>
+
+              {/* Contact client */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Contact client</label>
+                <input
+                  type="text"
+                  value={editForm.numeroDestinataire}
+                  onChange={(e) => handleEditField('numeroDestinataire', e.target.value)}
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:border-purple-400 focus:outline-none text-sm"
+                />
+              </div>
+
+              {/* Livreur */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Nom du livreur</label>
+                <input
+                  type="text"
+                  value={editForm.livreurNom}
+                  onChange={(e) => handleEditField('livreurNom', e.target.value)}
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:border-purple-400 focus:outline-none text-sm"
+                />
+              </div>
+
+              {/* Coût livraison */}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase mb-1">Coût de livraison (FCFA)</label>
+                <input
+                  type="number"
+                  value={editForm.coutLivraison}
+                  onChange={(e) => handleEditField('coutLivraison', e.target.value)}
+                  className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:border-purple-400 focus:outline-none text-sm"
+                  min="0"
+                />
+              </div>
+
+              {/* Articles */}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-xs font-semibold text-gray-500 uppercase">Articles</label>
+                  <button
+                    onClick={handleAddArticle}
+                    className="flex items-center gap-1 text-xs text-purple-600 font-medium hover:underline"
+                  >
+                    <FiPlus size={13} /> Ajouter
+                  </button>
+                </div>
+                <div className="space-y-2">
+                  {editForm.articles && editForm.articles.map((art, i) => (
+                    <div key={i} className="flex items-center gap-2 bg-gray-50 p-2 rounded-lg">
+                      <input
+                        type="text"
+                        value={art.nom}
+                        onChange={(e) => handleArticleChange(i, 'nom', e.target.value)}
+                        placeholder="Nom article"
+                        className="flex-1 px-2 py-1.5 border border-gray-200 rounded text-sm focus:outline-none focus:border-purple-400"
+                      />
+                      <input
+                        type="number"
+                        value={art.quantiteCommandee}
+                        onChange={(e) => handleArticleChange(i, 'quantiteCommandee', e.target.value)}
+                        placeholder="Qté"
+                        className="w-14 px-2 py-1.5 border border-gray-200 rounded text-sm text-center focus:outline-none focus:border-purple-400"
+                        min="1"
+                      />
+                      <input
+                        type="number"
+                        value={art.coutUnitaire}
+                        onChange={(e) => handleArticleChange(i, 'coutUnitaire', e.target.value)}
+                        placeholder="Prix"
+                        className="w-20 px-2 py-1.5 border border-gray-200 rounded text-sm text-center focus:outline-none focus:border-purple-400"
+                        min="0"
+                      />
+                      <button onClick={() => handleRemoveArticle(i)} className="p-1 text-red-400 hover:text-red-600">
+                        <FiMinus size={14} />
+                      </button>
+                    </div>
+                  ))}
+                  {editForm.articles?.length === 0 && (
+                    <p className="text-xs text-gray-400 text-center py-2">Aucun article</p>
+                  )}
+                </div>
+              </div>
+
+              {/* Récap total */}
+              <div className="bg-purple-50 border border-purple-100 rounded-xl px-4 py-3 flex items-center justify-between">
+                <span className="text-sm font-semibold text-gray-700">Nouveau total</span>
+                <span className="text-lg font-bold text-purple-700">{formatAmount(computedTotal)}</span>
+              </div>
+
+              {/* Boutons */}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowEditModal(false)}
+                  className="flex-1 py-2.5 bg-gray-100 rounded-lg font-medium text-sm hover:bg-gray-200 transition-colors"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handleSaveEdit}
+                  disabled={saving}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-purple-600 text-white rounded-lg font-medium text-sm hover:bg-purple-700 transition-colors disabled:opacity-60"
+                >
+                  {saving ? <FiRefreshCw size={15} className="animate-spin" /> : <FiSave size={15} />}
+                  {saving ? 'Sauvegarde...' : 'Enregistrer'}
+                </button>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }
