@@ -65,6 +65,51 @@ const UrgenceBadge = ({ urgence }) => {
 
 // ─── DÉTAILS SESSION ─────────────────────────────────────────────────────────
 
+function LivraisonRow({ liv }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="bg-gray-50 rounded-xl border border-gray-100">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-start justify-between p-3"
+      >
+        <div className="text-left">
+          <p className="text-xs font-bold text-gray-800">{liv.tracking}</p>
+          <p className="text-[10px] text-gray-400 mt-0.5">
+            {liv.quartier}
+            {liv.origine === 'partenaire' && (
+              <span className="ml-1.5 bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded-full font-bold">partenaire</span>
+            )}
+          </p>
+          <div className="flex gap-1.5 flex-wrap mt-1.5 text-[10px]">
+            {liv.nbArticlesLivres > 0 && <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold">✓ {liv.nbArticlesLivres} livré{liv.nbArticlesLivres > 1 ? 's' : ''}</span>}
+            {liv.nbArticlesRetournes > 0 && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold">↩ {liv.nbArticlesRetournes} retour</span>}
+            {liv.nbArticlesPerdus > 0 && <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">✗ {liv.nbArticlesPerdus} perdu</span>}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+          <p className="text-xs font-black text-indigo-700">{formatAmount(liv.totalCalcule)}</p>
+          <span className="text-[10px] text-gray-400">{open ? '▲' : '▼'}</span>
+        </div>
+      </button>
+      {open && liv.articles && liv.articles.length > 0 && (
+        <div className="px-3 pb-3 space-y-1 border-t border-gray-100 pt-2">
+          {liv.articles.map((art, j) => (
+            <div key={j} className="flex justify-between text-[10px] text-gray-500">
+              <span className="truncate max-w-[140px]">{art.nom}</span>
+              <span className="flex gap-2 flex-shrink-0">
+                {art.quantiteLivree > 0 && <span className="text-emerald-600 font-bold">✓{art.quantiteLivree}</span>}
+                {art.quantiteRetournee > 0 && <span className="text-amber-600 font-bold">↩{art.quantiteRetournee}</span>}
+                {art.quantitePerdue > 0 && <span className="text-red-600 font-bold">✗{art.quantitePerdue}</span>}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SessionDetails({ session }) {
   if (!session) return (
     <div className="bg-gray-50 rounded-2xl p-4 text-center text-xs text-gray-400">
@@ -74,36 +119,50 @@ function SessionDetails({ session }) {
 
   const [expanded, setExpanded] = useState(false);
 
+  // Détecter si la session est complète (stockée) ou reconstituée depuis livraisons
+  const isReconstituted = session._source === 'livraisons';
+  const hasFinancials = session.montantTheorique !== null && session.montantTheorique !== undefined;
+
   return (
     <div className="space-y-3">
-      {/* Résumé financier session */}
-      <div className="bg-slate-900 rounded-2xl p-4 text-white">
-        <p className="text-[10px] font-bold text-slate-400 uppercase mb-3">Session du {formatDateShort(session.date)}</p>
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <p className="text-[10px] text-slate-400">Attendu</p>
-            <p className="text-base font-black text-white">{formatAmount(session.montantTheorique)}</p>
-          </div>
-          <div>
-            <p className="text-[10px] text-slate-400">Reçu</p>
-            <p className="text-base font-black text-emerald-400">{formatAmount(session.montantRecu)}</p>
-          </div>
-          <div>
-            <p className="text-[10px] text-slate-400">Cash manquant</p>
-            <p className="text-base font-black text-red-400">{formatAmount(session.cashManquant)}</p>
-          </div>
-          <div>
-            <p className="text-[10px] text-slate-400">Articles perdus</p>
-            <p className="text-base font-black text-orange-400">{formatAmount(session.montantPerduArticles)}</p>
-          </div>
+      {/* Badge source si reconstituée */}
+      {isReconstituted && (
+        <div className="flex items-center gap-1.5 text-[10px] text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-3 py-2">
+          <FiAlertCircle size={11} />
+          <span>Données de livraisons uniquement — montants financiers non disponibles pour cette ancienne demande.</span>
         </div>
-        {session.ecartCash > 0 && (
-          <div className="mt-3 pt-3 border-t border-slate-700 flex justify-between items-center">
-            <span className="text-xs text-slate-400">Dette totale ajoutée</span>
-            <span className="text-sm font-black text-red-400">{formatAmount(session.totalDetteAjoutee)}</span>
+      )}
+
+      {/* Résumé financier — uniquement si les montants existent */}
+      {hasFinancials && (
+        <div className="bg-slate-900 rounded-2xl p-4 text-white">
+          <p className="text-[10px] font-bold text-slate-400 uppercase mb-3">Session du {formatDateShort(session.date)}</p>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <p className="text-[10px] text-slate-400">Attendu</p>
+              <p className="text-base font-black text-white">{formatAmount(session.montantTheorique)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-400">Reçu</p>
+              <p className="text-base font-black text-emerald-400">{formatAmount(session.montantRecu)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-400">Cash manquant</p>
+              <p className="text-base font-black text-red-400">{formatAmount(session.cashManquant)}</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-slate-400">Articles perdus</p>
+              <p className="text-base font-black text-orange-400">{formatAmount(session.montantPerduArticles)}</p>
+            </div>
           </div>
-        )}
-      </div>
+          {session.ecartCash > 0 && (
+            <div className="mt-3 pt-3 border-t border-slate-700 flex justify-between items-center">
+              <span className="text-xs text-slate-400">Dette totale ajoutée</span>
+              <span className="text-sm font-black text-red-400">{formatAmount(session.totalDetteAjoutee)}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Compteurs articles */}
       <div className="grid grid-cols-3 gap-2">
@@ -136,42 +195,14 @@ function SessionDetails({ session }) {
             onClick={() => setExpanded(v => !v)}
             className="w-full flex items-center justify-between py-2 px-3 bg-gray-100 rounded-xl text-xs font-bold text-gray-600"
           >
-            <span>{session.nbCourses} livraison{session.nbCourses > 1 ? 's' : ''} de la session</span>
+            <span>{session.livraisons.length} livraison{session.livraisons.length > 1 ? 's' : ''} de la session</span>
             <span>{expanded ? '▲ Réduire' : '▼ Voir détail'}</span>
           </button>
 
           {expanded && (
             <div className="mt-2 space-y-2">
               {session.livraisons.map((liv, i) => (
-                <div key={i} className="bg-gray-50 rounded-xl p-3 border border-gray-100">
-                  <div className="flex items-start justify-between mb-2">
-                    <div>
-                      <p className="text-xs font-bold text-gray-800">{liv.tracking}</p>
-                      <p className="text-[10px] text-gray-400">{liv.quartier} · {liv.origine}</p>
-                    </div>
-                    <p className="text-xs font-black text-indigo-700">{formatAmount(liv.totalCalcule)}</p>
-                  </div>
-                  <div className="flex gap-2 text-[10px]">
-                    <span className="bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full font-bold">✓ {liv.nbArticlesLivres} livré{liv.nbArticlesLivres > 1 ? 's' : ''}</span>
-                    {liv.nbArticlesRetournes > 0 && <span className="bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold">↩ {liv.nbArticlesRetournes} retour</span>}
-                    {liv.nbArticlesPerdus > 0 && <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-bold">✗ {liv.nbArticlesPerdus} perdu</span>}
-                  </div>
-                  {/* Articles détaillés */}
-                  {liv.articles && liv.articles.length > 0 && (
-                    <div className="mt-2 space-y-1">
-                      {liv.articles.map((art, j) => (
-                        <div key={j} className="flex justify-between text-[10px] text-gray-500">
-                          <span className="truncate max-w-[140px]">{art.nom}</span>
-                          <span className="flex gap-2 flex-shrink-0">
-                            {art.quantiteLivree > 0 && <span className="text-emerald-600">✓{art.quantiteLivree}</span>}
-                            {art.quantiteRetournee > 0 && <span className="text-amber-600">↩{art.quantiteRetournee}</span>}
-                            {art.quantitePerdue > 0 && <span className="text-red-600">✗{art.quantitePerdue}</span>}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                <LivraisonRow key={i} liv={liv} />
               ))}
             </div>
           )}
@@ -360,6 +391,46 @@ function GarageValidationModal({ demande, onClose, onActionSuccess }) {
   );
 }
 
+// ─── SESSION TRIGGER (résumé compact dans la carte) ──────────────────────────
+
+function SessionTrigger({ session }) {
+  const [open, setOpen] = useState(false);
+
+  const nbCourses = session.livraisons?.length ?? session.nbCourses ?? 0;
+  const hasFinancials = session.montantTheorique !== null && session.montantTheorique !== undefined;
+
+  return (
+    <div className="mt-3 pt-3 border-t border-gray-100">
+      <button
+        onClick={e => { e.stopPropagation(); setOpen(v => !v); }}
+        className="w-full flex items-center justify-between text-[10px] font-bold text-gray-400 hover:text-gray-600 transition-colors"
+      >
+        <span className="flex items-center gap-1.5">
+          <FiFileText size={10} />
+          Session d'origine
+          {nbCourses > 0 && (
+            <span className="bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded-full">
+              {nbCourses} course{nbCourses > 1 ? 's' : ''}
+            </span>
+          )}
+          {hasFinancials && session.cashManquant > 0 && (
+            <span className="bg-red-100 text-red-600 px-1.5 py-0.5 rounded-full">
+              -{formatAmount(session.cashManquant)}
+            </span>
+          )}
+        </span>
+        <span>{open ? '▲' : '▼'}</span>
+      </button>
+
+      {open && (
+        <div className="mt-3">
+          <SessionDetails session={session} />
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── CARTE DEMANDE ────────────────────────────────────────────────────────────
 
 function DemandeCard({ demande, onClick, isProcessed }) {
@@ -428,6 +499,9 @@ function DemandeCard({ demande, onClick, isProcessed }) {
             <p className="text-xs text-red-700">{demande.motifRejet}</p>
           </div>
         )}
+
+        {/* ── Session liée — compact collapsible ── */}
+        {demande.session && <SessionTrigger session={demande.session} />}
 
         {/* Dates + Action */}
         <div className="flex items-center justify-between">
@@ -689,25 +763,11 @@ export default function GarageValidationPage() {
                           </span>
                         </div>
                       )}
-                      {/* Session d'origine inline dans le résumé */}
+                      {/* Session d'origine complète dans le résumé */}
                       {d.session && (
                         <div className="mt-3 pt-3 border-t border-gray-100">
-                          <p className="text-[10px] font-bold text-gray-400 uppercase mb-2">Session d'origine</p>
-                          <div className="grid grid-cols-3 gap-1.5 mb-2">
-                            <div className="bg-gray-50 rounded-lg p-2 text-center">
-                              <p className="text-[9px] text-gray-400">Attendu</p>
-                              <p className="text-xs font-black text-gray-700">{formatAmount(d.session.montantTheorique)}</p>
-                            </div>
-                            <div className="bg-gray-50 rounded-lg p-2 text-center">
-                              <p className="text-[9px] text-gray-400">Reçu</p>
-                              <p className="text-xs font-black text-emerald-600">{formatAmount(d.session.montantRecu)}</p>
-                            </div>
-                            <div className="bg-gray-50 rounded-lg p-2 text-center">
-                              <p className="text-[9px] text-gray-400">Manquant</p>
-                              <p className="text-xs font-black text-red-500">{formatAmount(d.session.cashManquant)}</p>
-                            </div>
-                          </div>
-                          <p className="text-[10px] text-gray-400">{d.session.nbCourses} course{d.session.nbCourses > 1 ? 's' : ''} · {d.session.totalArticlesLivres ?? 0} livrés · {d.session.totalArticlesRetournes ?? 0} retours · {d.session.totalArticlesPerdus ?? 0} perdus</p>
+                          <p className="text-[10px] font-bold text-gray-400 uppercase mb-2">Session de validation liée</p>
+                          <SessionDetails session={d.session} />
                         </div>
                       )}
                     </div>

@@ -1,100 +1,83 @@
-//--- START OF FILE DeliveryDriverSalaryPageLogic.js ---
-
 import { db, storage } from '../../../services/firebase';
 import { 
   collection, 
   query, 
-  where, 
   getDocs, 
   doc, 
   updateDoc, 
-  addDoc,
+  setDoc,
   serverTimestamp,
-  writeBatch
+  writeBatch,
+  increment,
+  arrayUnion
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
-/**
- * Vérifie si une livraison est considérée comme réussie  
- */
-const isDeliverySuccessful = (delivery) => {
-  if (delivery.statut === 'livre' || delivery.statut === 'partiel') return true;
-  if (delivery.articles && Array.isArray(delivery.articles)) {
-    return delivery.articles.some(art => 
-      art.quantiteLivree > 0 || 
-      art.statut === 'livre' || 
-      art.statut === 'ok'
-    );
-  }
-  if (delivery.dateValidation) return true;
-  return false;
+// ============================================================================
+// CONSTANTES & UTILITAIRES DE BASE
+// ============================================================================
+export const DUREE_CYCLE = 25; // Durée fixe d'un cycle en jours de TRAVAIL
+
+export const formatCycleLabel = (cycle) => {
+  const debut = new Date(cycle.dateDebut).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const fin = new Date(cycle.dateFin).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  return `Cycle ${cycle.numero} — ${debut} au ${fin}`;
 };
 
-/**
- * Calcule le nombre de jours ouvrables dans une période (cycle de paie)
- * Exclut les dimanches (jours non travaillés par défaut)
- */
-const getJoursCyclePaie = () => 25; // Cycle fixe de 25 jours par mois
-
-
-/**
- * Formate la période en nom de mois lisible (ex: "Mars 2025")
- */
-const formatPeriodLabel = (period) => {
-  const [year, month] = period.split('-').map(Number);
-  const date = new Date(year, month - 1, 1);
-  return date.toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })
-    .replace(/^./, c => c.toUpperCase());
-};
-
-/**
- * Récupère les données de salaires
- */
-export const fetchSalaryData = async (period) => {
+// Extrait la date "YYYY-MM-DD" de manière sécurisée (gère les dates strings et les Timestamps Firebase)
+const toDayString = (dateInput) => {
+  if (!dateInput) return null;
   try {
-    const startDate = `${period}-01T00:00:00.000Z`;
-    const endDate = `${period}-31T23:59:59.999Z`;
+      const date = typeof dateInput?.toDate === 'function' ? dateInput.toDate() : new Date(dateInput);
+      return date.toISOString().split('T')[0];
+  } catch (e) {
+      return null;
+  }
+};
 
+// RÈGLE ALIGNÉE : Une livraison est réussie UNIQUEMENT si statut 'livre' ou 'partiel'
+const isDeliverySuccessful = (delivery) => {
+  return delivery.statut === 'livre' || delivery.statut === 'partiel';
+};
+
+// ============================================================================
+// FETCH DONNÉES SALAIRES — Dette purement calculée depuis l'historique
+// ============================================================================
+
+export const fetchSalaryData = async () => {
+  try {
     const livreursQuery = query(collection(db, "livreurs"));
-    
-    const deliveriesQuery = query(
-      collection(db, "livraisons"),
-      where("dateCreation", ">=", startDate),
-      where("dateCreation", "<=", endDate)
-    );
+    const livreursSnap = await getDocs(livreursQuery);
 
-    const versementsQuery = query(
-      collection(db, "versements_livreurs"),
-      where("date", ">=", startDate),
-      where("date", "<=", endDate)
-    );
-
-    const garagesQuery = query(
-      collection(db, "demandes_garage"),
-      where("statut", "==", "valide"),
-      where("dateValidation", ">=", startDate),
-      where("dateValidation", "<=", endDate)
-    );
-
-    const paymentsQuery = query(collection(db, "paiements_salaires"), where("periode", "==", period));
-
-    const [livreursSnap, deliveriesSnap, versementsSnap, garagesSnap, paymentsSnap] = await Promise.all([
-      getDocs(livreursQuery),
-      getDocs(deliveriesQuery),
-      getDocs(versementsQuery),
-      getDocs(garagesQuery),
-      getDocs(paymentsQuery)
+    // 1. Récupération globale alignée avec l'audit
+    const [deliveriesSnap, partDeliveriesSnap, cyclesSnap, versementsSnap, garagesSnap] = await Promise.all([
+      getDocs(collection(db, "livraisons")),
+      getDocs(collection(db, "livraison_partenaire")),
+      getDocs(collection(db, "cycles_livreurs")),
+      getDocs(collection(db, "versements_livreurs")),
+      getDocs(collection(db, "demandes_garage"))
     ]);
 
+    // Regroupement de TOUTES les livraisons (Interne + Partenaire)
     const deliveriesByLivreur = {};
-    deliveriesSnap.forEach(d => {
+    const processDelivery = (d) => {
       const data = d.data();
-      const lId = data.livreurId;
-      if (lId) {
-        if (!deliveriesByLivreur[lId]) deliveriesByLivreur[lId] = [];
-        deliveriesByLivreur[lId].push(data);
+      if (data.livreurId) {
+        if (!deliveriesByLivreur[data.livreurId]) deliveriesByLivreur[data.livreurId] = [];
+        deliveriesByLivreur[data.livreurId].push(data);
+      }
+    };
+    deliveriesSnap.forEach(processDelivery);
+    partDeliveriesSnap.forEach(processDelivery);
+
+    const cyclesByLivreur = {};
+    cyclesSnap.forEach(c => {
+      const data = { id: c.id, ...c.data() };
+      if (data.livreurId) {
+        if (!cyclesByLivreur[data.livreurId]) cyclesByLivreur[data.livreurId] = [];
+        cyclesByLivreur[data.livreurId].push(data);
       }
     });
 
@@ -107,24 +90,15 @@ export const fetchSalaryData = async (period) => {
       }
     });
 
-    const garagesByLivreur = {};
+    // Création de la Map de Garage (Clé: livreurId_YYYY-MM-DD)
+    const garageMap = new Map();
     garagesSnap.forEach(g => {
-      const data = g.data();
-      const lId = data.livreurId || data.idLivreur;
-      if (lId) {
-        if (!garagesByLivreur[lId]) garagesByLivreur[lId] = [];
-        garagesByLivreur[lId].push(data);
-      }
+        const data = g.data();
+        if (data.livreurId) {
+            const day = toDayString(data.dateCreation || data.createdAt);
+            if (day) garageMap.set(`${data.livreurId}_${day}`, data);
+        }
     });
-
-    const paymentsByLivreur = {};
-    paymentsSnap.forEach(p => {
-      const data = p.data();
-      paymentsByLivreur[data.livreurId] = data;
-    });
-
-    // Calculer les jours du cycle de paie (jours ouvrables du mois)
-    const joursCyclePaie = getJoursCyclePaie();
 
     const livreursData = [];
     livreursSnap.forEach(livreurDoc => {
@@ -132,87 +106,186 @@ export const fetchSalaryData = async (period) => {
       const livreurId = livreur.id;
       
       const allDeliveries = deliveriesByLivreur[livreurId] || [];
-      const versements = versementsByLivreur[livreurId] || [];
-      const garages = garagesByLivreur[livreurId] || [];
+      const cyclesEnregistres = cyclesByLivreur[livreurId] || [];
 
-      // CALCULS PERFORMANCE
-      const totalAttribuees = allDeliveries.length;
-      const livraisonsSucces = allDeliveries.filter(d => isDeliverySuccessful(d));
-      const nombreSucces = livraisonsSucces.length;
-      
-      const tauxSucces = totalAttribuees > 0 
-        ? Math.round((nombreSucces / totalAttribuees) * 100) 
-        : 0;
+      // Extraire jours travaillés via dateValidation (ou createdAt par défaut)
+      const uniqueDatesSet = new Set();
+      allDeliveries.forEach(d => {
+        const dateStr = d.dateValidation || d.createdAt || d.dateCreation;
+        const day = toDayString(dateStr);
+        if (day) uniqueDatesSet.add(day);
+      });
+      const uniqueDates = Array.from(uniqueDatesSet).sort();
 
-      // Jours travaillés réels (présence distincte)
-      const uniqueDays = new Set(allDeliveries.map(d => d.dateCreation?.split('T')[0])); 
-      const joursTravailles = uniqueDays.size;
+      const cyclesDynamiques = [];
+      let numero = 1;
+      let lastCycleFinObj = null;
 
-      // CALCULS FINANCIERS
-      let detailsFinanciers = [];
-      let totalDettes = 0;
-      versements.forEach(v => {
-        const montant = (v.montantManquant || 0) + (v.montantPerduMarchandise || 0);
-        if (montant > 0) {
-          totalDettes += montant;
-          detailsFinanciers.push({
-            type: 'dette',
-            montant,
-            motif: v.notes || "Manquant versement",
-            date: v.date ? new Date(v.date).toLocaleDateString('fr-FR') : '-'
-          });
+      // Création des tranches de 25 jours
+      for (let i = 0; i < uniqueDates.length; i += DUREE_CYCLE) {
+        const chunk = uniqueDates.slice(i, i + DUREE_CYCLE);
+        
+        let dateDebutObj;
+        if (lastCycleFinObj) {
+            dateDebutObj = new Date(lastCycleFinObj.getTime() + 1);
+        } else {
+            dateDebutObj = new Date(chunk[0]);
+            dateDebutObj.setUTCHours(0, 0, 0, 0);
         }
+
+        let dateFinObj = new Date(chunk[chunk.length - 1]);
+        const enregistre = cyclesEnregistres.find(ce => ce.cycleNumero === numero);
+        let statut = 'en_cours';
+
+        if (enregistre) {
+            statut = enregistre.statut;
+            if (enregistre.dateDebut) dateDebutObj = new Date(enregistre.dateDebut);
+            if (enregistre.dateFin) dateFinObj = new Date(enregistre.dateFin);
+            lastCycleFinObj = new Date(dateFinObj);
+        } else if (chunk.length === DUREE_CYCLE) {
+            statut = 'ecoule';
+            dateFinObj.setUTCHours(23, 59, 59, 999);
+            lastCycleFinObj = new Date(dateFinObj);
+        } else {
+            statut = 'en_cours';
+            const now = new Date();
+            if (dateFinObj < now) dateFinObj = now;
+            dateFinObj.setUTCHours(23, 59, 59, 999);
+            lastCycleFinObj = new Date(dateFinObj);
+        }
+
+        cyclesDynamiques.push({
+            numero, dateDebut: dateDebutObj.toISOString(), dateFin: dateFinObj.toISOString(),
+            joursTravailles: chunk.length, joursReels: chunk, statut, montantPaye: enregistre?.montantPaye || 0,
+            datePaiement: enregistre?.datePaiement || null, captureEcranUrl: enregistre?.captureEcranUrl || null,
+            firestoreId: enregistre?.id || null,
+        });
+        numero++;
+      }
+
+      // Si pas d'historique, on initialise un cycle vide
+      if (cyclesDynamiques.length === 0) {
+          cyclesDynamiques.push({ numero: 1, dateDebut: new Date().toISOString(), dateFin: new Date().toISOString(), joursTravailles: 0, joursReels: [], statut: 'en_cours', firestoreId: null });
+      } else if (cyclesDynamiques[cyclesDynamiques.length - 1].statut !== 'en_cours') {
+          const last = cyclesDynamiques[cyclesDynamiques.length - 1];
+          const nextDebut = new Date(new Date(last.dateFin).getTime() + 1);
+          cyclesDynamiques.push({ numero: last.numero + 1, dateDebut: nextDebut.toISOString(), dateFin: new Date().toISOString(), joursTravailles: 0, joursReels: [], statut: 'en_cours', firestoreId: null });
+      }
+
+      // Finalisation des données pour chaque cycle
+      const cyclesAvecStats = cyclesDynamiques.map(cycle => {
+        const joursCycle = cycle.joursReels || [];
+
+        // Filtre les livraisons appartenant aux dates de CE cycle
+        const livraisonsCycle = allDeliveries.filter(d => {
+          const day = toDayString(d.dateValidation || d.createdAt || d.dateCreation);
+          return joursCycle.includes(day);
+        });
+
+        // Calcul strict basé sur 'livre' et 'partiel'
+        const totalAttribuees = livraisonsCycle.length;
+        const nombreSucces = livraisonsCycle.filter(isDeliverySuccessful).length;
+        const tauxSucces = totalAttribuees > 0 ? Math.round((nombreSucces / totalAttribuees) * 100) : 0;
+
+        const salaireBase = livreur.finance?.salaireBase || 50000;
+        const primeParLivraison = livreur.finance?.primeParLivraison || 250;
+        const primesLivraisons = nombreSucces * primeParLivraison;
+        const salaireBrut = cycle.joursTravailles > 0 ? (salaireBase + primesLivraisons) : 0;
+
+        // --- RÈGLES STRICTES DE DETTE (Croisement Versements / Garage) ---
+        let sommeTracee = 0;
+        let detailsFinanciers = [];
+
+        // Récupère les versements qui tombent dans les jours travaillés de ce cycle
+        const versementsCycle = (versementsByLivreur[livreurId] || []).filter(v => {
+            const dayStr = toDayString(v.date || v.createdAt);
+            return joursCycle.includes(dayStr);
+        });
+
+        versementsCycle.forEach(v => {
+            const vDateObj = v.date ? new Date(v.date) : (v.createdAt?.toDate?.() || new Date(v.createdAt));
+            const dayStr = toDayString(vDateObj);
+            const garageKey = `${livreurId}_${dayStr}`;
+            const linkedGarage = garageMap.get(garageKey);
+
+            // 1. Marchandise Perdue : TOUJOURS une dette
+            const perduMarchandise = Number(v.montantPerduMarchandise || 0);
+            if (perduMarchandise > 0) {
+                detailsFinanciers.push({
+                    type: 'dette_marchandise', 
+                    montant: perduMarchandise,
+                    motif: 'Marchandise Perdue (Déclaré au versement)',
+                    date: vDateObj.toLocaleDateString('fr-FR')
+                });
+                sommeTracee += perduMarchandise;
+            }
+
+            // 2. Cash Manquant : Vérification de la justification Garage
+            const manquantCash = Number(v.montantManquant || 0);
+            if (manquantCash > 0) {
+                if (linkedGarage && linkedGarage.statut === 'valide') {
+                    // Justifié : PAS de dette
+                    detailsFinanciers.push({
+                        type: 'garage_valide', 
+                        montant: manquantCash,
+                        motif: `Demande Garage Validée: ${linkedGarage.motif || 'Entretien'}`,
+                        date: vDateObj.toLocaleDateString('fr-FR')
+                    });
+                } else {
+                    // Non Justifié / Rejeté : DETTE
+                    let statusLabel = linkedGarage ? `Garage ${linkedGarage.statut.replace('_', ' ')}` : 'Aucune justification';
+                    detailsFinanciers.push({
+                        type: 'dette_cash', 
+                        montant: manquantCash,
+                        motif: `Cash Manquant (${statusLabel})`,
+                        date: vDateObj.toLocaleDateString('fr-FR')
+                    });
+                    sommeTracee += manquantCash;
+                }
+            }
+        });
+
+        // 3. Retenues Manuelles
+        const historiques = livreur.historiqueDettes || [];
+        historiques.forEach(h => {
+            const d = new Date(h.date);
+            const debutDate = new Date(cycle.dateDebut);
+            const finDate = new Date(cycle.dateFin);
+            if (d >= debutDate && d <= finDate) {
+                detailsFinanciers.push({
+                    type: 'dette_manuelle', 
+                    montant: h.montant, 
+                    motif: `Retenue manuelle : ${h.motif}`,
+                    date: d.toLocaleDateString('fr-FR')
+                });
+                sommeTracee += h.montant;
+            }
+        });
+
+        // RÈGLE STRICTE : totalManquants est TOUJOURS calculé depuis le journal financier (sommeTracee).
+        // On n'utilise JAMAIS la valeur stockée en Firestore (enregistre.totalManquants)
+        // pour garantir la cohérence avec les entrées du journal (versements + garage + dettes manuelles).
+        const totalManquants = sommeTracee;
+
+        const salaireNet = salaireBrut - totalManquants;
+
+        return {
+          ...cycle, livraisonsTotal: totalAttribuees, livraisonsEffectuees: nombreSucces, tauxSucces,
+          salaireBase, primeParLivraison, primesLivraisons, salaireBrut, totalManquants, salaireNet,
+          manquants: detailsFinanciers, numeroBulletin: `BUL-C${cycle.numero}-${livreurId.slice(-4).toUpperCase()}`
+        };
       });
 
-      let totalRegularisations = 0;
-      garages.forEach(g => {
-        const montant = parseFloat(g.coutReel || g.montantValide || 0);
-        if (montant > 0) {
-          totalRegularisations += montant;
-          detailsFinanciers.push({
-            type: 'credit',
-            montant,
-            motif: `Garage: ${g.motif || 'Réparation'}`,
-            date: g.dateValidation ? new Date(g.dateValidation).toLocaleDateString('fr-FR') : '-'
-          });
-        }
-      });
+      const cycleEnCours = cyclesAvecStats[cyclesAvecStats.length - 1];
 
-      const totalManquantsCalculated = Math.max(0, totalDettes - totalRegularisations);
-      const salaireBase = livreur.finance?.salaireBase || 50000;
-      const primeParLivraison = livreur.finance?.primeParLivraison || 250;
-      const primesLivraisons = nombreSucces * primeParLivraison;
-      const salaireBrut = salaireBase + primesLivraisons;
-      const salaireNet = salaireBrut - totalManquantsCalculated;
-
-      const payment = paymentsByLivreur[livreurId];
-      
       livreursData.push({
-        id: livreurId,
-        nom: livreur.nom,
-        photo: livreur.photoUrl || '👨‍🦱',
-        // CORRECTION: on expose les deux métriques distinctement
-        joursTravailles,           // Jours de présence réelle
-        joursCyclePaie,            // Jours ouvrables du cycle (identique pour tous)
-        livraisonsTotal: totalAttribuees,
-        livraisonsEffectuees: nombreSucces,
-        tauxSucces,
-        salaireBase,
-        primeParLivraison,
-        primesLivraisons,
-        salaireBrut,
-        manquants: detailsFinanciers, 
-        totalManquants: totalManquantsCalculated, 
-        salaireNet,
-        statut: payment ? 'paye' : 'non_paye',
-        montantPaye: payment?.montantPaye || 0,
-        datePaiement: payment?.datePaiement || null,
-        captureEcran: payment?.captureEcranUrl || null,
-        numeroBulletin: `BUL-${period.replace('-', '')}-${livreurId.slice(-4).toUpperCase()}`
+        id: livreurId, nom: livreur.nom || livreur.nomComplet, photo: livreur.photoUrl || '👨‍🦱', 
+        detteInitiale: cycleEnCours ? cycleEnCours.totalManquants : 0,
+        cycles: cyclesAvecStats, cycleEnCours: cycleEnCours || null, ...(cycleEnCours || {}),
       });
     });
 
-    return livreursData.sort((a,b) => a.nom.localeCompare(b.nom));
+    return livreursData.sort((a, b) => a.nom.localeCompare(b.nom));
 
   } catch (error) {
     console.error("Erreur fetchSalaryData:", error);
@@ -220,79 +293,140 @@ export const fetchSalaryData = async (period) => {
   }
 };
 
+// ============================================================================
+// SAUVEGARDE SNAPSHOT SALAIRES
+// ============================================================================
+export const saveSalarySnapshot = async (livreursData) => {
+  try {
+    const promises = livreursData.map(async (livreur) => {
+      const cycle = livreur.cycleEnCours;
+      if (!cycle) return;
+
+      const snapshot = {
+        livreurId: livreur.id,
+        nom: livreur.nom,
+        updatedAt: serverTimestamp(),
+        detteEnCours: cycle.totalManquants || 0,
+        cycleEnCours: {
+          numero: cycle.numero,
+          statut: cycle.statut,
+          dateDebut: cycle.dateDebut,
+          dateFin: cycle.dateFin,
+          joursTravailles: cycle.joursTravailles || 0,
+          livraisonsTotal: cycle.livraisonsTotal || 0,
+          livraisonsEffectuees: cycle.livraisonsEffectuees || 0,
+          tauxSucces: cycle.tauxSucces || 0,
+          salaireBase: cycle.salaireBase || 0,
+          primeParLivraison: cycle.primeParLivraison || 0,
+          primesLivraisons: cycle.primesLivraisons || 0,
+          salaireBrut: cycle.salaireBrut || 0,
+          totalManquants: cycle.totalManquants || 0,
+          salaireNet: cycle.salaireNet || 0,
+          manquants: (cycle.manquants || []).map(m => ({
+            type: m.type,
+            montant: m.montant,
+            motif: m.motif,
+            date: m.date,
+          })),
+        },
+        historiqueResume: (livreur.cycles || [])
+          .filter(c => c.statut === 'paye' || c.statut === 'cloture')
+          .map(c => ({
+            numero: c.numero,
+            statut: c.statut,
+            salaireNet: c.salaireNet || 0,
+            totalManquants: c.totalManquants || 0,
+            montantPaye: c.montantPaye || 0,
+            datePaiement: c.datePaiement || null,
+          })),
+      };
+
+      const snapshotRef = doc(db, 'salary_snapshots', livreur.id);
+      await setDoc(snapshotRef, snapshot);
+    });
+
+    await Promise.all(promises);
+  } catch (error) {
+    console.error('[SalarySnapshot] Erreur de sauvegarde:', error);
+  }
+};
+
+// ============================================================================
+// ACTIONS SUR CYCLES & CONFIGURATIONS
+// ============================================================================
+export const cloturerCycle = async (livreurId, livreurNom, cycle) => {
+  try {
+    const batch = writeBatch(db);
+    const cycleRef = doc(collection(db, 'cycles_livreurs'));
+    batch.set(cycleRef, {
+      livreurId, livreurNom, cycleNumero: cycle.numero,
+      dateDebut: cycle.dateDebut, dateFin: cycle.dateFin,
+      statut: 'cloture', clotureLe: new Date().toISOString(),
+      totalManquants: cycle.totalManquants || 0,
+      salaireBrut: cycle.salaireBrut || 0, salaireNet: cycle.salaireNet || 0,
+      createdAt: serverTimestamp()
+    });
+
+    if (cycle.totalManquants > 0) {
+      const livreurRef = doc(db, 'livreurs', livreurId);
+      batch.update(livreurRef, { "finance.detteActuelle": increment(-cycle.totalManquants) });
+    }
+    await batch.commit();
+    return { success: true };
+  } catch (error) { throw new Error("Échec de la clôture du cycle."); }
+};
+
+export const payerCycle = async (livreurId, livreurNom, cycle, montantPaye, imageFile) => {
+  try {
+    const timestamp = Date.now();
+    const storageRef = ref(storage, `preuves_paiement_cycles/${livreurId}_C${cycle.numero}_${timestamp}`);
+    const uploadResult = await uploadBytes(storageRef, imageFile);
+    const downloadURL = await getDownloadURL(uploadResult.ref);
+
+    if (cycle.firestoreId) {
+      await updateDoc(doc(db, 'cycles_livreurs', cycle.firestoreId), {
+        statut: 'paye', montantPaye, captureEcranUrl: downloadURL,
+        datePaiement: new Date().toISOString(), updatedAt: serverTimestamp()
+      });
+    } else {
+      throw new Error("Le cycle doit d'abord être clôturé.");
+    }
+    return { success: true };
+  } catch (error) { throw new Error("Échec de l'enregistrement du paiement du cycle."); }
+};
+
 export const updateDriverSalaryConfig = async (livreurId, salaireBase, primeParLivraison) => {
-    try {
-        const livreurRef = doc(db, "livreurs", livreurId);
-        await updateDoc(livreurRef, {
-            "finance.salaireBase": salaireBase,
-            "finance.primeParLivraison": primeParLivraison,
-            "updatedAt": serverTimestamp()
-        });
-        return { success: true };
-    } catch (error) {
-        throw new Error("Échec de la mise à jour.");
-    }
+  try {
+    await updateDoc(doc(db, "livreurs", livreurId), {
+      "finance.salaireBase": salaireBase, "finance.primeParLivraison": primeParLivraison, "updatedAt": serverTimestamp()
+    });
+    return { success: true };
+  } catch (error) { throw new Error("Échec de la mise à jour de la configuration."); }
 };
 
-export const addSalaryDeduction = async (livreurId, livreurNom, montant, motif, period) => {
-    try {
-        const batch = writeBatch(db);
-        const versementRef = doc(collection(db, "versements_livreurs"));
-        batch.set(versementRef, {
-          livreurId,
-          livreurNom,
-          montantManquant: montant,
-          notes: `Déduction manuelle: ${motif}`,
-          date: new Date().toISOString(),
-          createdAt: serverTimestamp(),
-          periodeSalaire: period
-        });
-        await batch.commit();
-        return { success: true };
-    } catch (error) {
-        throw new Error("Erreur lors de l'ajout du manquant.");
-    }
-};
-
-export const saveSalaryPayment = async (livreurId, livreurNom, montantPaye, period, imageFile) => {
-    try {
-        const timestamp = Date.now();
-        const storageRef = ref(storage, `preuves_paiement_salaires/${period}/${livreurId}_${timestamp}`);
-        const uploadResult = await uploadBytes(storageRef, imageFile);
-        const downloadURL = await getDownloadURL(uploadResult.ref);
-    
-        const paymentData = {
-          livreurId, livreurNom, montantPaye, periode: period,
-          captureEcranUrl: downloadURL,
-          datePaiement: new Date().toISOString(),
-          createdAt: serverTimestamp()
-        };
-    
-        await addDoc(collection(db, 'paiements_salaires'), paymentData);
-        return { success: true };
-      } catch (error) {
-        throw new Error("Échec de l'enregistrement du paiement.");
-      }
+export const addSalaryDeduction = async (livreurId, montant, motif) => {
+  try {
+    await updateDoc(doc(db, "livreurs", livreurId), {
+      "finance.detteActuelle": increment(montant),
+      historiqueDettes: arrayUnion({ montant, motif, date: new Date().toISOString() })
+    });
+    return { success: true };
+  } catch (error) { throw new Error("Erreur lors de l'ajout de la retenue."); }
 };
 
 // ============================================================================
-// FONCTIONS UTILITAIRES PDF
+// PDF HELPERS & GENERATION
 // ============================================================================
-
 const getLogoBase64 = async () => {
   try {
     const response = await fetch('/logo.png'); 
-    if (!response.ok) throw new Error("Logo introuvable");
     const blob = await response.blob();
     return new Promise((resolve) => {
       const reader = new FileReader();
       reader.onloadend = () => resolve(reader.result);
       reader.readAsDataURL(blob);
     });
-  } catch (e) {
-    console.warn("Logo non chargé (utiliser un logo.png dans public/):", e);
-    return null;
-  }
+  } catch (e) { return null; }
 };
 
 const formatCurrency = (amount) => {
@@ -303,798 +437,193 @@ const formatCurrency = (amount) => {
 
 const calculateSummary = (livreursData) => {
   const totalLivreurs = livreursData.length;
-  const totalPayes = livreursData.filter(l => l.statut === 'paye').length;
+  const totalPayes = livreursData.filter(l => l.cycleEnCours?.statut === 'paye').length;
   const totalNonPayes = totalLivreurs - totalPayes;
-  
-  const totalSalairesBrut = livreursData.reduce((sum, l) => sum + l.salaireBrut, 0);
-  const totalManquants = livreursData.reduce((sum, l) => sum + l.totalManquants, 0);
-  const totalSalairesNet = livreursData.reduce((sum, l) => sum + l.salaireNet, 0);
-  const totalPaye = livreursData.reduce((sum, l) => sum + l.montantPaye, 0);
+  const totalSalairesBrut = livreursData.reduce((sum, l) => sum + (l.cycleEnCours?.salaireBrut || 0), 0);
+  const totalManquants = livreursData.reduce((sum, l) => sum + (l.cycleEnCours?.totalManquants || 0), 0);
+  const totalSalairesNet = livreursData.reduce((sum, l) => sum + (l.cycleEnCours?.salaireNet || 0), 0);
+  const totalPaye = livreursData.reduce((sum, l) => sum + (l.cycleEnCours?.montantPaye || 0), 0);
   const totalRestant = totalSalairesNet - totalPaye;
-  
-  const totalLivraisons = livreursData.reduce((sum, l) => sum + l.livraisonsTotal, 0);
-  const totalLivraisonsEffectuees = livreursData.reduce((sum, l) => sum + l.livraisonsEffectuees, 0);
-  const tauxSuccesMoyen = totalLivraisons > 0 
-    ? Math.round((totalLivraisonsEffectuees / totalLivraisons) * 100) 
-    : 0;
+  const totalLivraisons = livreursData.reduce((sum, l) => sum + (l.cycleEnCours?.livraisonsTotal || 0), 0);
+  const totalLivraisonsEffectuees = livreursData.reduce((sum, l) => sum + (l.cycleEnCours?.livraisonsEffectuees || 0), 0);
+  const tauxSuccesMoyen = totalLivraisons > 0 ? Math.round((totalLivraisonsEffectuees / totalLivraisons) * 100) : 0;
 
-  return {
-    totalLivreurs,
-    totalPayes,
-    totalNonPayes,
-    totalSalairesBrut,
-    totalManquants,
-    totalSalairesNet,
-    totalPaye,
-    totalRestant,
-    totalLivraisons,
-    totalLivraisonsEffectuees,
-    tauxSuccesMoyen
-  };
+  return { totalLivreurs, totalPayes, totalNonPayes, totalSalairesBrut, totalManquants, totalSalairesNet, totalPaye, totalRestant, totalLivraisons, totalLivraisonsEffectuees, tauxSuccesMoyen };
 };
 
-const addFooter = (doc, pageNumber, totalPages, period) => {
+const addFooter = (doc, pageNumber, totalPages, label) => {
   const pageWidth = doc.internal.pageSize.width;
   const pageHeight = doc.internal.pageSize.height;
-  
-  // Ligne séparatrice footer
-  doc.setDrawColor(220, 220, 220);
-  doc.setLineWidth(0.3);
-  doc.line(14, pageHeight - 18, pageWidth - 14, pageHeight - 18);
-  
-  doc.setFontSize(7);
-  doc.setTextColor(150, 150, 150);
-  doc.setFont('helvetica', 'normal');
-  
-  // Gauche: Confidentiel
+  doc.setDrawColor(220, 220, 220); doc.setLineWidth(0.3); doc.line(14, pageHeight - 18, pageWidth - 14, pageHeight - 18);
+  doc.setFontSize(7); doc.setTextColor(150, 150, 150); doc.setFont('helvetica', 'normal');
   doc.text('Document confidentiel - Usage interne uniquement', 14, pageHeight - 11);
-  
-  // Centre: Période
-  doc.text(`Bulletin de paie - ${period || ''}`, pageWidth / 2, pageHeight - 11, { align: 'center' });
-  
-  // Droite: Pagination
+  doc.text(`Bulletin de paie — ${label}`, pageWidth / 2, pageHeight - 11, { align: 'center' });
   doc.text(`Page ${pageNumber} / ${totalPages}`, pageWidth - 14, pageHeight - 11, { align: 'right' });
 };
 
-// ============================================================================
-// GENERATE SALARY PDF (RAPPORT COMPLET - UPLOAD + OPEN)
-// ============================================================================
-export const generateSalaryPDF = async (livreursData, period) => {
+export const downloadSalaryPDFDirectly = async (livreursData) => {
   try {
     const doc = new jsPDF();
-    const pageWidth = doc.internal.pageSize.width;
-    const logoData = await getLogoBase64(); 
-    const periodLabel = formatPeriodLabel(period);
-    
-    let yPos = 0;
-    
-    // Header
-    doc.setFillColor(79, 70, 229);
-    doc.rect(0, 0, pageWidth, 38, 'F');
-    
-    if (logoData) {
-        try { doc.addImage(logoData, 'PNG', 14, 8, 20, 20); } catch (err) {
-            doc.setFillColor(255, 255, 255); doc.circle(22, 19, 9, 'F');
-            doc.setTextColor(79, 70, 229); doc.setFontSize(10); doc.text('$', 19, 22);
-        }
-    } else {
-        doc.setFillColor(255, 255, 255); doc.circle(22, 19, 9, 'F');
-        doc.setTextColor(79, 70, 229); doc.setFontSize(10); doc.text('$', 19, 22);
-    }
-    
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(18);
-    doc.setFont('helvetica', 'bold');
-    doc.text('RAPPORT DE SALAIRES', 42, 17);
-    
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'normal');
+    const logoData = await getLogoBase64();
     const today = new Date().toLocaleDateString('fr-FR');
-    doc.text(`Période: ${periodLabel}  •  Généré le: ${today}`, 42, 27);
+    doc.setFillColor(30, 30, 50); doc.rect(0, 0, doc.internal.pageSize.width, 38, 'F');
+    if (logoData) { try { doc.addImage(logoData, 'PNG', 14, 8, 20, 20); } catch (e) {} }
     
-    yPos = 52;
-
-    // Résumé
-    const summary = calculateSummary(livreursData);
-
-    doc.setFontSize(13);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(31, 41, 55);
-    doc.text('Résumé Général', 14, yPos);
-    yPos += 10;
-
-    // Cards résumé
-    const cardWidth = (pageWidth - 42) / 3;
-    const cardHeight = 26;
+    doc.setTextColor(255, 255, 255); doc.setFontSize(18); doc.text('RAPPORT DE SALAIRES', 42, 18);
+    doc.setFontSize(9); doc.setTextColor(180, 180, 210); doc.text(`Cycles en cours  •  Généré le: ${today}`, 42, 27);
     
-    doc.setFillColor(239, 246, 255);
-    doc.roundedRect(14, yPos, cardWidth, cardHeight, 3, 3, 'F');
-    doc.setTextColor(59, 130, 246);
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'bold');
-    doc.text('TOTAL LIVREURS', 14 + cardWidth/2, yPos + 8, { align: 'center' });
-    doc.setTextColor(30, 58, 138);
-    doc.setFontSize(18);
-    doc.text(summary.totalLivreurs.toString(), 14 + cardWidth/2, yPos + 20, { align: 'center' });
-    
-    doc.setFillColor(240, 253, 244);
-    doc.roundedRect(14 + cardWidth + 7, yPos, cardWidth, cardHeight, 3, 3, 'F');
-    doc.setTextColor(34, 197, 94);
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'bold');
-    doc.text('PAYÉS / NON PAYÉS', 14 + cardWidth + 7 + cardWidth/2, yPos + 8, { align: 'center' });
-    doc.setTextColor(21, 128, 61);
-    doc.setFontSize(18);
-    doc.text(`${summary.totalPayes} / ${summary.totalNonPayes}`, 14 + cardWidth + 7 + cardWidth/2, yPos + 20, { align: 'center' });
-    
-    doc.setFillColor(254, 249, 195);
-    doc.roundedRect(14 + (cardWidth + 7) * 2, yPos, cardWidth, cardHeight, 3, 3, 'F');
-    doc.setTextColor(202, 138, 4);
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'bold');
-    doc.text('MASSE SALARIALE NETTE', 14 + (cardWidth + 7) * 2 + cardWidth/2, yPos + 8, { align: 'center' });
-    doc.setTextColor(133, 77, 14);
-    doc.setFontSize(10);
-    doc.text(formatCurrency(summary.totalSalairesNet), 14 + (cardWidth + 7) * 2 + cardWidth/2, yPos + 20, { align: 'center' });
-
-    yPos += cardHeight + 14;
-
-    // Tableau financier résumé
     autoTable(doc, {
-      startY: yPos,
-      head: [['Indicateur Financier', 'Montant']],
-      body: [
-        ['Total brut des salaires', formatCurrency(summary.totalSalairesBrut)],
-        ['Total déductions / manquants', `- ${formatCurrency(summary.totalManquants)}`],
-        ['Total net à payer', formatCurrency(summary.totalSalairesNet)],
-        ['Total déjà payé', formatCurrency(summary.totalPaye)],
-        ['Restant à payer', formatCurrency(summary.totalRestant)],
-      ],
-      theme: 'plain',
-      headStyles: {
-        fillColor: [243, 244, 246],
-        textColor: [75, 85, 99],
-        fontStyle: 'bold',
-        fontSize: 8,
-        cellPadding: { top: 4, bottom: 4, left: 8, right: 8 }
-      },
-      styles: {
-        fontSize: 8.5,
-        cellPadding: { top: 3, bottom: 3, left: 8, right: 8 }
-      },
-      columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 110 },
-        1: { halign: 'right', fontStyle: 'bold', textColor: [79, 70, 229] }
-      },
-      didParseCell: (data) => {
-        if (data.section === 'body' && data.row.index === 4) {
-          data.cell.styles.fillColor = [254, 249, 195];
-          data.cell.styles.textColor = [133, 77, 14];
-        }
-      },
-      margin: { left: 14, right: 14 }
+      startY: 50,
+      head: [['Livreur', 'Présence', 'Livraisons', 'Net', 'Statut']],
+      body: livreursData.map(l => [
+        l.nom, `${l.cycleEnCours?.joursTravailles || 0}j`, `${l.cycleEnCours?.livraisonsEffectuees || 0}`,
+        formatCurrency(l.cycleEnCours?.salaireNet), l.cycleEnCours?.statut || 'N/A'
+      ]),
+      theme: 'grid', headStyles: { fillColor: [30, 30, 50], textColor: [255, 255, 255] }
     });
-
-    yPos = doc.lastAutoTable.finalY + 14;
-    
-    // Tableau Livreurs
-    doc.setFontSize(13);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(31, 41, 55);
-    doc.text('Détail par Livreur', 14, yPos);
-    yPos += 8;
-
-    const tableData = livreursData.map(l => [
-      l.nom,
-      `${l.joursTravailles} / ${l.joursCyclePaie}`,
-      `${l.livraisonsEffectuees}/${l.livraisonsTotal}`,
-      `${l.tauxSucces}%`,
-      formatCurrency(l.salaireBase),
-      formatCurrency(l.primesLivraisons),
-      formatCurrency(l.totalManquants) !== '0 FCFA' ? `- ${formatCurrency(l.totalManquants)}` : '-',
-      formatCurrency(l.salaireNet),
-      l.statut === 'paye' ? 'Payé' : 'Non payé'
-    ]);
-
-    autoTable(doc, {
-      startY: yPos,
-      head: [['Livreur', 'Présence', 'Livraisons', 'Taux', 'Base', 'Primes', 'Retenues', 'Net', 'Statut']],
-      body: tableData,
-      theme: 'plain',
-      headStyles: {
-        fillColor: [79, 70, 229],
-        textColor: [255, 255, 255],
-        fontStyle: 'bold',
-        fontSize: 7,
-        cellPadding: 4
-      },
-      styles: {
-        fontSize: 7.5,
-        cellPadding: 3,
-        overflow: 'linebreak'
-      },
-      columnStyles: {
-        0: { fontStyle: 'bold' },
-        1: { cellWidth: 20, halign: 'center' },
-        2: { cellWidth: 20, halign: 'center' },
-        3: { cellWidth: 13, halign: 'center' },
-        4: { cellWidth: 26, halign: 'right' },
-        5: { cellWidth: 24, halign: 'right', textColor: [21, 128, 61] },
-        6: { cellWidth: 22, halign: 'right', textColor: [185, 28, 28] },
-        7: { cellWidth: 26, halign: 'right', fontStyle: 'bold', textColor: [79, 70, 229] },
-        8: { cellWidth: 18, halign: 'center' }
-      },
-      didParseCell: function(data) {
-        if (data.section === 'body' && data.column.index === 8) {
-          data.cell.styles.textColor = data.cell.raw === 'Payé' ? [21, 128, 61] : [185, 28, 28];
-          data.cell.styles.fontStyle = 'bold';
-        }
-      },
-      alternateRowStyles: { fillColor: [249, 250, 251] },
-      margin: { left: 14, right: 14 }
-    });
-
-    const totalPages = doc.internal.getNumberOfPages();
-    for (let i = 1; i <= totalPages; i++) {
-      doc.setPage(i);
-      addFooter(doc, i, totalPages, periodLabel);
-    }
-
-    const pdfBlob = doc.output('blob');
-    const timestamp = Date.now();
-    const storageRef = ref(storage, `rapports_salaires/${period}_${timestamp}.pdf`);
-    const uploadResult = await uploadBytes(storageRef, pdfBlob);
-    const downloadURL = await getDownloadURL(uploadResult.ref);
-
-    window.open(downloadURL, '_blank');
-
-    return {
-      success: true,
-      url: downloadURL,
-      filename: `rapport_salaires_${period}.pdf`
-    };
-
-  } catch (error) {
-    console.error('Erreur generateSalaryPDF:', error);
-    throw new Error('Impossible de générer le rapport PDF');
-  }
+    doc.save(`rapport_salaires_cycles_${Date.now()}.pdf`);
+    return { success: true };
+  } catch (error) { throw new Error('Impossible de télécharger le PDF'); }
 };
 
-// ============================================================================
-// GENERATE INDIVIDUAL PDF — BULLETIN DE SALAIRE PROFESSIONNEL
-// ============================================================================
-export const generateIndividualSalaryPDF = async (livreurData, period) => {
+export const generateIndividualSalaryPDF = async (livreurData, cycle) => {
   try {
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.width;
     const pageHeight = doc.internal.pageSize.height;
     const logoData = await getLogoBase64();
-    const periodLabel = formatPeriodLabel(period);
+    const cycleLabel = formatCycleLabel(cycle);
     const today = new Date().toLocaleDateString('fr-FR');
 
-    // ── BANDEAU HEADER EMPLOYEUR ──────────────────────────────────────────────
-    doc.setFillColor(30, 30, 50);
-    doc.rect(0, 0, pageWidth, 45, 'F');
+    doc.setFillColor(30, 30, 50); doc.rect(0, 0, pageWidth, 45, 'F');
+    doc.setFillColor(99, 102, 241); doc.rect(0, 0, 5, 45, 'F');
+    if (logoData) { try { doc.addImage(logoData, 'PNG', 14, 8, 22, 22); } catch(e) {} }
 
-    // Accent bar gauche coloré
-    doc.setFillColor(99, 102, 241); // indigo-500
-    doc.rect(0, 0, 5, 45, 'F');
-
-    if (logoData) {
-      try { doc.addImage(logoData, 'PNG', 14, 8, 22, 22); } catch(e) {}
-    } else {
-      doc.setFillColor(99, 102, 241);
-      doc.roundedRect(14, 8, 22, 22, 3, 3, 'F');
-      doc.setTextColor(255, 255, 255);
-      doc.setFontSize(12);
-      doc.setFont('helvetica', 'bold');
-      doc.text('LIV', 25, 22, { align: 'center' });
-    }
-
-    // Nom entreprise
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(14);
-    doc.setFont('helvetica', 'bold');
-    doc.text('SERVICE LIVRAISON', 42, 17);
-
-    doc.setFontSize(8);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(180, 180, 210);
-    doc.text('Gestion des Salaires & Performances', 42, 24);
-
-    // Numéro bulletin & date (côté droit)
-    doc.setFontSize(8);
-    doc.setTextColor(200, 200, 230);
-    doc.text(`N° ${livreurData.numeroBulletin || `BUL-${period.replace('-', '')}`}`, pageWidth - 14, 14, { align: 'right' });
+    doc.setTextColor(255, 255, 255); doc.setFontSize(14); doc.setFont('helvetica', 'bold'); doc.text('SERVICE LIVRAISON', 42, 17);
+    doc.setFontSize(8); doc.setFont('helvetica', 'normal'); doc.setTextColor(180, 180, 210); doc.text('Gestion des Salaires & Performances', 42, 24);
+    doc.setFontSize(8); doc.setTextColor(200, 200, 230); doc.text(`N° ${cycle.numeroBulletin}`, pageWidth - 14, 14, { align: 'right' });
     doc.text(`Émis le: ${today}`, pageWidth - 14, 21, { align: 'right' });
-    doc.text(`Période: ${periodLabel}`, pageWidth - 14, 28, { align: 'right' });
 
-    // Titre BULLETIN DE SALAIRE
-    doc.setFillColor(99, 102, 241);
-    doc.rect(0, 45, pageWidth, 10, 'F');
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(255, 255, 255);
+    doc.setFillColor(99, 102, 241); doc.rect(0, 45, pageWidth, 10, 'F');
+    doc.setFontSize(10); doc.setFont('helvetica', 'bold'); doc.setTextColor(255, 255, 255);
     doc.text('BULLETIN DE PAIE', pageWidth / 2, 51.5, { align: 'center' });
 
     let yPos = 65;
-
-    // ── SECTION EMPLOYÉ ──────────────────────────────────────────────────────
-    doc.setFillColor(248, 250, 252);
-    doc.roundedRect(14, yPos, pageWidth - 28, 22, 3, 3, 'F');
-    doc.setDrawColor(226, 232, 240);
-    doc.setLineWidth(0.4);
-    doc.roundedRect(14, yPos, pageWidth - 28, 22, 3, 3, 'S');
-
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(100, 116, 139);
-    doc.text('EMPLOYÉ', 20, yPos + 7);
-
-    doc.setFontSize(12);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(15, 23, 42);
-    doc.text(livreurData.nom, 20, yPos + 15);
-
-    // Infos droite: matricule
-    doc.setFontSize(7);
-    doc.setTextColor(100, 116, 139);
-    doc.setFont('helvetica', 'bold');
-    doc.text('MATRICULE', pageWidth - 70, yPos + 7);
-    doc.setFontSize(9);
-    doc.setTextColor(15, 23, 42);
-    doc.setFont('helvetica', 'bold');
-    doc.text(livreurData.id.slice(-8).toUpperCase(), pageWidth - 70, yPos + 15);
-
-    // Fonction
-    doc.setFontSize(7);
-    doc.setTextColor(100, 116, 139);
-    doc.setFont('helvetica', 'bold');
-    doc.text('FONCTION', pageWidth/2, yPos + 7);
-    doc.setFontSize(9);
-    doc.setTextColor(15, 23, 42);
-    doc.setFont('helvetica', 'normal');
-    doc.text('Livreur', pageWidth/2, yPos + 15);
-
+    doc.setFillColor(248, 250, 252); doc.roundedRect(14, yPos, pageWidth - 28, 22, 3, 3, 'F');
+    doc.setDrawColor(226, 232, 240); doc.setLineWidth(0.4); doc.roundedRect(14, yPos, pageWidth - 28, 22, 3, 3, 'S');
+    doc.setFontSize(7); doc.setFont('helvetica', 'bold'); doc.setTextColor(100, 116, 139); doc.text('EMPLOYÉ', 20, yPos + 7);
+    doc.setFontSize(12); doc.setFont('helvetica', 'bold'); doc.setTextColor(15, 23, 42); doc.text(livreurData.nom, 20, yPos + 15);
+    doc.setFontSize(7); doc.setTextColor(100, 116, 139); doc.setFont('helvetica', 'bold'); doc.text('MATRICULE', pageWidth - 70, yPos + 7);
+    doc.setFontSize(9); doc.setTextColor(15, 23, 42); doc.setFont('helvetica', 'bold'); doc.text(livreurData.id.slice(-8).toUpperCase(), pageWidth - 70, yPos + 15);
     yPos += 30;
 
-    // ── SECTION PÉRIODE & CYCLE ───────────────────────────────────────────────
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(30, 41, 59);
-    doc.text('Période & Présence', 14, yPos);
-
-    doc.setDrawColor(99, 102, 241);
-    doc.setLineWidth(1);
-    doc.line(14, yPos + 2, 80, yPos + 2);
-    yPos += 8;
+    doc.setFontSize(10); doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 41, 59); doc.text('Cycle & Présence', 14, yPos);
+    doc.setDrawColor(99, 102, 241); doc.setLineWidth(1); doc.line(14, yPos + 2, 80, yPos + 2); yPos += 8;
 
     autoTable(doc, {
       startY: yPos,
       body: [
-        ['Période de paie', periodLabel],
-        ['Cycle de paie (jours ouvrables)', livreurData.joursCyclePaie.toString()],
-        ['Jours de présence effective', livreurData.joursTravailles.toString()],
-        ['Jours d\'absence', (livreurData.joursCyclePaie - livreurData.joursTravailles).toString()],
-        ['Taux de présence', `${livreurData.joursCyclePaie > 0 ? Math.round((livreurData.joursTravailles / livreurData.joursCyclePaie) * 100) : 0}%`],
+        ['Cycle de paie', `Cycle ${cycle.numero}`],
+        ['Période du cycle', `${new Date(cycle.dateDebut).toLocaleDateString('fr-FR')} → ${new Date(cycle.dateFin).toLocaleDateString('fr-FR')}`],
+        ['Jours de présence', cycle.joursTravailles.toString()],
       ],
-      theme: 'plain',
-      styles: { fontSize: 8.5, cellPadding: { top: 3, bottom: 3, left: 6, right: 6 } },
-      columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 100, fillColor: [248, 250, 252], textColor: [71, 85, 105] },
-        1: { halign: 'right', fontStyle: 'bold', textColor: [30, 41, 59] }
-      },
-      didParseCell: (data) => {
-        if (data.section === 'body' && data.row.index === 3 && data.column.index === 1) {
-          const absences = livreurData.joursCyclePaie - livreurData.joursTravailles;
-          if (absences > 0) data.cell.styles.textColor = [185, 28, 28];
-        }
-      },
-      margin: { left: 14, right: 14 }
+      theme: 'plain', styles: { fontSize: 8.5, cellPadding: 3 },
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 100, fillColor: [248, 250, 252] }, 1: { halign: 'right', fontStyle: 'bold' } }, margin: { left: 14, right: 14 }
     });
-
     yPos = doc.lastAutoTable.finalY + 12;
 
-    // ── SECTION PERFORMANCE ───────────────────────────────────────────────────
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(30, 41, 59);
-    doc.text('Performance & Activité', 14, yPos);
-    doc.setDrawColor(99, 102, 241);
-    doc.setLineWidth(1);
-    doc.line(14, yPos + 2, 90, yPos + 2);
-    yPos += 8;
+    doc.setFontSize(10); doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 41, 59); doc.text('Performance & Activité', 14, yPos);
+    doc.setDrawColor(99, 102, 241); doc.setLineWidth(1); doc.line(14, yPos + 2, 90, yPos + 2); yPos += 8;
 
     autoTable(doc, {
       startY: yPos,
       body: [
-        ['Livraisons attribuées', livreurData.livraisonsTotal.toString()],
-        ['Livraisons réussies', livreurData.livraisonsEffectuees.toString()],
-        ['Livraisons échouées / retournées', (livreurData.livraisonsTotal - livreurData.livraisonsEffectuees).toString()],
-        ['Taux de succès', `${livreurData.tauxSucces}%`],
+        ['Livraisons attribuées', cycle.livraisonsTotal.toString()],
+        ['Livraisons réussies', cycle.livraisonsEffectuees.toString()],
+        ['Taux de succès', `${cycle.tauxSucces}%`],
       ],
-      theme: 'plain',
-      styles: { fontSize: 8.5, cellPadding: { top: 3, bottom: 3, left: 6, right: 6 } },
-      columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 100, fillColor: [248, 250, 252], textColor: [71, 85, 105] },
-        1: { halign: 'right', fontStyle: 'bold', textColor: [30, 41, 59] }
-      },
-      didParseCell: (data) => {
-        if (data.section === 'body' && data.row.index === 3 && data.column.index === 1) {
-          data.cell.styles.textColor = livreurData.tauxSucces >= 80 ? [21, 128, 61] : [185, 28, 28];
-        }
-      },
-      margin: { left: 14, right: 14 }
+      theme: 'plain', styles: { fontSize: 8.5, cellPadding: 3 },
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 100, fillColor: [248, 250, 252] }, 1: { halign: 'right', fontStyle: 'bold' } }, margin: { left: 14, right: 14 }
     });
-
     yPos = doc.lastAutoTable.finalY + 12;
 
-    // ── SECTION RÉMUNÉRATION ──────────────────────────────────────────────────
-    doc.setFontSize(10);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(30, 41, 59);
-    doc.text('Détail de la Rémunération', 14, yPos);
-    doc.setDrawColor(99, 102, 241);
-    doc.setLineWidth(1);
-    doc.line(14, yPos + 2, 98, yPos + 2);
-    yPos += 8;
+    doc.setFontSize(10); doc.setFont('helvetica', 'bold'); doc.setTextColor(30, 41, 59); doc.text('Journal Financier & Rémunération', 14, yPos);
+    doc.setDrawColor(99, 102, 241); doc.setLineWidth(1); doc.line(14, yPos + 2, 98, yPos + 2); yPos += 8;
 
     const remunerationData = [
       ['ÉLÉMENTS DU SALAIRE', '', 'MONTANT'],
-      ['Salaire de base mensuel', '', formatCurrency(livreurData.salaireBase)],
-      [`Prime de livraison (${formatCurrency(livreurData.primeParLivraison)} × ${livreurData.livraisonsEffectuees} livraisons)`, '', `+ ${formatCurrency(livreurData.primesLivraisons)}`],
+      ['Salaire de base', '', formatCurrency(cycle.salaireBase)],
+      [`Primes livraisons (${formatCurrency(cycle.primeParLivraison)} × ${cycle.livraisonsEffectuees})`, '', `+ ${formatCurrency(cycle.primesLivraisons)}`],
     ];
 
-    // Lignes de retenues
     const retenueRows = [];
-    if (livreurData.totalManquants > 0) {
-      retenueRows.push(['RETENUES & DÉDUCTIONS', '', '']);
-      if (livreurData.manquants && livreurData.manquants.length > 0) {
-        livreurData.manquants.filter(m => m.type === 'dette').forEach(m => {
-          retenueRows.push([`  • ${m.motif.slice(0, 45)}`, m.date, `- ${formatCurrency(m.montant)}`]);
-        });
-      } else {
-        retenueRows.push(['  • Total manquants / dettes', '', `- ${formatCurrency(livreurData.totalManquants)}`]);
-      }
-    }
-
-    // Crédits garage
-    if (livreurData.manquants && livreurData.manquants.some(m => m.type === 'credit')) {
-      retenueRows.push(['CRÉDITS / RÉGULARISATIONS', '', '']);
-      livreurData.manquants.filter(m => m.type === 'credit').forEach(m => {
-        retenueRows.push([`  • ${m.motif.slice(0, 45)}`, m.date, `+ ${formatCurrency(m.montant)}`]);
+    if (cycle.manquants && cycle.manquants.length > 0) {
+      retenueRows.push(['JOURNAL FINANCIER (Dettes & Remboursements)', '', '']);
+      cycle.manquants.forEach(m => {
+        if (m.type === 'garage_valide') {
+            retenueRows.push([`  • ${m.motif.slice(0, 60)}`, m.date, `(Justifié)`]);
+        } else {
+            retenueRows.push([`  • ${m.motif.slice(0, 60)}`, m.date, `- ${formatCurrency(Math.abs(m.montant))}`]);
+        }
       });
     }
 
-    const allRows = [
-      ...remunerationData,
-      ...retenueRows,
-    ];
-
     autoTable(doc, {
       startY: yPos,
-      body: allRows,
-      theme: 'plain',
-      styles: { fontSize: 8.5, cellPadding: { top: 3, bottom: 3, left: 6, right: 6 } },
-      columnStyles: {
-        0: { cellWidth: 110 },
-        1: { cellWidth: 25, halign: 'center', textColor: [100, 116, 139] },
-        2: { cellWidth: 45, halign: 'right', fontStyle: 'bold' }
-      },
+      body: [...remunerationData, ...retenueRows],
+      theme: 'plain', styles: { fontSize: 8.5, cellPadding: 3 },
+      columnStyles: { 0: { cellWidth: 110 }, 1: { cellWidth: 25, halign: 'center' }, 2: { cellWidth: 45, halign: 'right', fontStyle: 'bold' } },
       didParseCell: (data) => {
         const raw = data.cell.raw || '';
-        // En-têtes de section
-        if (raw === 'ÉLÉMENTS DU SALAIRE' || raw === 'RETENUES & DÉDUCTIONS' || raw === 'CRÉDITS / RÉGULARISATIONS') {
-          data.cell.styles.fillColor = [243, 244, 246];
-          data.cell.styles.textColor = [71, 85, 105];
-          data.cell.styles.fontStyle = 'bold';
-          data.cell.styles.fontSize = 7.5;
+        if (['ÉLÉMENTS DU SALAIRE', 'JOURNAL FINANCIER (Dettes & Remboursements)'].includes(raw)) {
+          data.cell.styles.fillColor = [243, 244, 246]; data.cell.styles.fontStyle = 'bold'; data.cell.styles.fontSize = 7.5;
         }
-        // Montants négatifs en rouge
-        if (data.column.index === 2 && typeof raw === 'string' && raw.startsWith('-')) {
-          data.cell.styles.textColor = [185, 28, 28];
-        }
-        // Montants positifs en vert (primes)
-        if (data.column.index === 2 && typeof raw === 'string' && raw.startsWith('+')) {
-          data.cell.styles.textColor = [21, 128, 61];
-        }
-      },
-      margin: { left: 14, right: 14 }
+        if (data.column.index === 2 && typeof raw === 'string' && raw.startsWith('-')) data.cell.styles.textColor = [185, 28, 28];
+        if (data.column.index === 2 && typeof raw === 'string' && raw.startsWith('+')) data.cell.styles.textColor = [21, 128, 61];
+      }, margin: { left: 14, right: 14 }
     });
-
     yPos = doc.lastAutoTable.finalY + 6;
 
-    // ── LIGNE TOTAUX : BRUT + NET ─────────────────────────────────────────────
-    // Salaire Brut
-    doc.setFillColor(243, 244, 246);
-    doc.roundedRect(14, yPos, pageWidth - 28, 10, 2, 2, 'F');
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(30, 41, 59);
-    doc.text('SALAIRE BRUT', 20, yPos + 7);
-    doc.text(formatCurrency(livreurData.salaireBrut), pageWidth - 20, yPos + 7, { align: 'right' });
+    doc.setFillColor(243, 244, 246); doc.roundedRect(14, yPos, pageWidth - 28, 10, 2, 2, 'F');
+    doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.text('SALAIRE BRUT', 20, yPos + 7); doc.text(formatCurrency(cycle.salaireBrut), pageWidth - 20, yPos + 7, { align: 'right' });
     yPos += 14;
 
-    // Salaire Net (mis en évidence)
-    doc.setFillColor(254, 249, 195);
-    doc.roundedRect(14, yPos, pageWidth - 28, 14, 3, 3, 'F');
-    doc.setDrawColor(202, 138, 4);
-    doc.setLineWidth(0.8);
-    doc.roundedRect(14, yPos, pageWidth - 28, 14, 3, 3, 'S');
-    doc.setFontSize(11);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(133, 77, 14);
-    doc.text('NET À PAYER', 20, yPos + 9);
-    doc.setFontSize(13);
-    doc.text(formatCurrency(livreurData.salaireNet), pageWidth - 20, yPos + 10, { align: 'right' });
-
-    yPos += 22;
-
-    // ── STATUT PAIEMENT ───────────────────────────────────────────────────────
-    const isPaye = livreurData.statut === 'paye';
-    doc.setFillColor(isPaye ? 220 : 254, isPaye ? 252 : 226, isPaye ? 231 : 226);
-    doc.roundedRect(14, yPos, pageWidth - 28, isPaye ? 20 : 14, 3, 3, 'F');
-    doc.setDrawColor(isPaye ? 21 : 185, isPaye ? 128 : 28, isPaye ? 61 : 28);
-    doc.setLineWidth(0.5);
-    doc.roundedRect(14, yPos, pageWidth - 28, isPaye ? 20 : 14, 3, 3, 'S');
-
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'bold');
-
-    if (isPaye) {
-      doc.setTextColor(21, 128, 61);
-      doc.text('✓  SALAIRE PAYÉ', 22, yPos + 8);
-      doc.setFontSize(8);
-      doc.setFont('helvetica', 'normal');
-      doc.text(`Montant versé: ${formatCurrency(livreurData.montantPaye)}`, 22, yPos + 15);
-      if (livreurData.datePaiement) {
-        doc.text(`Date de paiement: ${new Date(livreurData.datePaiement).toLocaleDateString('fr-FR')}`, pageWidth - 20, yPos + 15, { align: 'right' });
-      }
-    } else {
-      doc.setTextColor(185, 28, 28);
-      doc.text('⚠  EN ATTENTE DE PAIEMENT', 22, yPos + 9);
-    }
-
-    yPos += (isPaye ? 20 : 14) + 14;
-
-    // ── ZONE SIGNATURES ───────────────────────────────────────────────────────
-    if (yPos < pageHeight - 55) {
-      doc.setFontSize(8);
-      doc.setFont('helvetica', 'normal');
-      doc.setTextColor(100, 116, 139);
-
-      const sigWidth = (pageWidth - 42) / 2;
-
-      // Signature Responsable
-      doc.setDrawColor(200, 200, 200);
-      doc.setLineWidth(0.3);
-      doc.line(14, yPos + 18, 14 + sigWidth, yPos + 18);
-      doc.text('Signature du Responsable', 14 + sigWidth / 2, yPos + 24, { align: 'center' });
-      doc.text('Date: ___________________', 14 + sigWidth / 2, yPos + 30, { align: 'center' });
-
-      // Signature Employé
-      doc.line(14 + sigWidth + 14, yPos + 18, pageWidth - 14, yPos + 18);
-      doc.text('Signature du Livreur', 14 + sigWidth + 14 + sigWidth / 2, yPos + 24, { align: 'center' });
-      doc.text('(Lu et approuvé)', 14 + sigWidth + 14 + sigWidth / 2, yPos + 30, { align: 'center' });
-    }
-
-    // ── FOOTER ────────────────────────────────────────────────────────────────
-    addFooter(doc, 1, 1, periodLabel);
-
-    // ── UPLOAD & OPEN ─────────────────────────────────────────────────────────
+    doc.setFillColor(254, 249, 195); doc.roundedRect(14, yPos, pageWidth - 28, 14, 3, 3, 'F');
+    doc.setDrawColor(202, 138, 4); doc.setLineWidth(0.8); doc.roundedRect(14, yPos, pageWidth - 28, 14, 3, 3, 'S');
+    doc.setFontSize(11); doc.setTextColor(133, 77, 14); doc.text('NET À PAYER', 20, yPos + 9); doc.setFontSize(13); doc.text(formatCurrency(cycle.salaireNet), pageWidth - 20, yPos + 10, { align: 'right' });
+    
+    addFooter(doc, 1, 1, cycleLabel);
     const pdfBlob = doc.output('blob');
-    const timestamp = Date.now();
-    const storageRef = ref(storage, `bulletins_salaires/${period}/${livreurData.id}_${timestamp}.pdf`);
-    const uploadResult = await uploadBytes(storageRef, pdfBlob);
-    const downloadURL = await getDownloadURL(uploadResult.ref);
-
-    window.open(downloadURL, '_blank');
-
-    return {
-      success: true,
-      url: downloadURL,
-      filename: `bulletin_salaire_${livreurData.nom}_${period}.pdf`
-    };
-
-  } catch (error) {
-    console.error('Erreur generateIndividualSalaryPDF:', error);
-    throw new Error('Impossible de générer le bulletin de salaire');
-  }
-};
-
-// ============================================================================
-// DOWNLOAD DIRECTLY (RAPPORT COMPLET DIRECT)
-// ============================================================================
-export const downloadSalaryPDFDirectly = async (livreursData, period) => {
-  try {
-    const doc = new jsPDF();
-    const pageWidth = doc.internal.pageSize.width;
-    const logoData = await getLogoBase64(); 
-    const periodLabel = formatPeriodLabel(period);
-    
-    let yPos = 0;
-    
-    // Header
-    doc.setFillColor(30, 30, 50);
-    doc.rect(0, 0, pageWidth, 38, 'F');
-    doc.setFillColor(99, 102, 241);
-    doc.rect(0, 0, 5, 38, 'F');
-    
-    if (logoData) {
-        try { doc.addImage(logoData, 'PNG', 14, 8, 20, 20); } catch (err) {
-            doc.setFillColor(99, 102, 241); doc.roundedRect(14, 8, 20, 20, 3, 3, 'F');
-            doc.setTextColor(255, 255, 255); doc.setFontSize(9); doc.text('LIV', 24, 20, { align: 'center' });
-        }
-    } else {
-        doc.setFillColor(99, 102, 241); doc.roundedRect(14, 8, 20, 20, 3, 3, 'F');
-        doc.setTextColor(255, 255, 255); doc.setFontSize(9); doc.text('LIV', 24, 20, { align: 'center' });
-    }
-    
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(18);
-    doc.setFont('helvetica', 'bold');
-    doc.text('RAPPORT DE SALAIRES', 42, 18);
-    
-    doc.setFontSize(9);
-    doc.setFont('helvetica', 'normal');
-    doc.setTextColor(180, 180, 210);
-    const today = new Date().toLocaleDateString('fr-FR');
-    doc.text(`Période: ${periodLabel}  •  Généré le: ${today}`, 42, 27);
-    
-    yPos = 50;
-
-    // Résumé
-    const summary = calculateSummary(livreursData);
-
-    doc.setFontSize(13);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(31, 41, 55);
-    doc.text('Résumé Général', 14, yPos);
-    yPos += 10;
-
-    // Cards
-    const cardWidth = (pageWidth - 42) / 3;
-    const cardHeight = 26;
-    
-    doc.setFillColor(239, 246, 255);
-    doc.roundedRect(14, yPos, cardWidth, cardHeight, 3, 3, 'F');
-    doc.setTextColor(59, 130, 246);
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'bold');
-    doc.text('TOTAL LIVREURS', 14 + cardWidth/2, yPos + 8, { align: 'center' });
-    doc.setTextColor(30, 58, 138);
-    doc.setFontSize(18);
-    doc.text(summary.totalLivreurs.toString(), 14 + cardWidth/2, yPos + 20, { align: 'center' });
-    
-    doc.setFillColor(240, 253, 244);
-    doc.roundedRect(14 + cardWidth + 7, yPos, cardWidth, cardHeight, 3, 3, 'F');
-    doc.setTextColor(34, 197, 94);
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'bold');
-    doc.text('PAYÉS / NON PAYÉS', 14 + cardWidth + 7 + cardWidth/2, yPos + 8, { align: 'center' });
-    doc.setTextColor(21, 128, 61);
-    doc.setFontSize(18);
-    doc.text(`${summary.totalPayes} / ${summary.totalNonPayes}`, 14 + cardWidth + 7 + cardWidth/2, yPos + 20, { align: 'center' });
-    
-    doc.setFillColor(254, 249, 195);
-    doc.roundedRect(14 + (cardWidth + 7) * 2, yPos, cardWidth, cardHeight, 3, 3, 'F');
-    doc.setTextColor(202, 138, 4);
-    doc.setFontSize(7);
-    doc.setFont('helvetica', 'bold');
-    doc.text('MASSE SALARIALE NETTE', 14 + (cardWidth + 7) * 2 + cardWidth/2, yPos + 8, { align: 'center' });
-    doc.setTextColor(133, 77, 14);
-    doc.setFontSize(10);
-    doc.text(formatCurrency(summary.totalSalairesNet), 14 + (cardWidth + 7) * 2 + cardWidth/2, yPos + 20, { align: 'center' });
-
-    yPos += cardHeight + 14;
-
-    // Tableau financier résumé
-    autoTable(doc, {
-      startY: yPos,
-      head: [['Indicateur Financier', 'Montant']],
-      body: [
-        ['Total brut des salaires', formatCurrency(summary.totalSalairesBrut)],
-        ['Total déductions / manquants', `- ${formatCurrency(summary.totalManquants)}`],
-        ['Total net à payer', formatCurrency(summary.totalSalairesNet)],
-        ['Total déjà payé', formatCurrency(summary.totalPaye)],
-        ['Restant à payer', formatCurrency(summary.totalRestant)],
-      ],
-      theme: 'plain',
-      headStyles: {
-        fillColor: [243, 244, 246],
-        textColor: [75, 85, 99],
-        fontStyle: 'bold',
-        fontSize: 8,
-        cellPadding: { top: 4, bottom: 4, left: 8, right: 8 }
-      },
-      styles: {
-        fontSize: 8.5,
-        cellPadding: { top: 3, bottom: 3, left: 8, right: 8 }
-      },
-      columnStyles: {
-        0: { fontStyle: 'bold', cellWidth: 110 },
-        1: { halign: 'right', fontStyle: 'bold', textColor: [79, 70, 229] }
-      },
-      didParseCell: (data) => {
-        if (data.section === 'body' && data.row.index === 4) {
-          data.cell.styles.fillColor = [254, 249, 195];
-          data.cell.styles.textColor = [133, 77, 14];
-        }
-      },
-      margin: { left: 14, right: 14 }
-    });
-
-    yPos = doc.lastAutoTable.finalY + 14;
-    
-    // Tableau Livreurs
-    doc.setFontSize(13);
-    doc.setFont('helvetica', 'bold');
-    doc.setTextColor(31, 41, 55);
-    doc.text('Détail par Livreur', 14, yPos);
-    yPos += 8;
-
-    const tableData = livreursData.map(l => [
-      l.nom,
-      `${l.joursTravailles} / ${l.joursCyclePaie}`,
-      `${l.livraisonsEffectuees}/${l.livraisonsTotal}`,
-      `${l.tauxSucces}%`,
-      formatCurrency(l.salaireBase),
-      formatCurrency(l.primesLivraisons),
-      l.totalManquants > 0 ? `- ${formatCurrency(l.totalManquants)}` : '-',
-      formatCurrency(l.salaireNet),
-      l.statut === 'paye' ? 'Payé' : 'Non payé'
-    ]);
-
-    autoTable(doc, {
-      startY: yPos,
-      head: [['Livreur', 'Présence', 'Livraisons', 'Taux', 'Base', 'Primes', 'Retenues', 'Net', 'Statut']],
-      body: tableData,
-      theme: 'plain',
-      headStyles: {
-        fillColor: [30, 30, 50],
-        textColor: [255, 255, 255],
-        fontStyle: 'bold',
-        fontSize: 7,
-        cellPadding: 4
-      },
-      styles: {
-        fontSize: 7.5,
-        cellPadding: 3,
-        overflow: 'linebreak'
-      },
-      columnStyles: {
-        0: { fontStyle: 'bold' },
-        1: { cellWidth: 20, halign: 'center' },
-        2: { cellWidth: 20, halign: 'center' },
-        3: { cellWidth: 13, halign: 'center' },
-        4: { cellWidth: 26, halign: 'right' },
-        5: { cellWidth: 24, halign: 'right', textColor: [21, 128, 61] },
-        6: { cellWidth: 22, halign: 'right', textColor: [185, 28, 28] },
-        7: { cellWidth: 26, halign: 'right', fontStyle: 'bold', textColor: [79, 70, 229] },
-        8: { cellWidth: 18, halign: 'center' }
-      },
-      didParseCell: function(data) {
-        if (data.section === 'body' && data.column.index === 8) {
-          data.cell.styles.textColor = data.cell.raw === 'Payé' ? [21, 128, 61] : [185, 28, 28];
-          data.cell.styles.fontStyle = 'bold';
-        }
-      },
-      alternateRowStyles: { fillColor: [249, 250, 251] },
-      margin: { left: 14, right: 14 }
-    });
-
-    const totalPages = doc.internal.getNumberOfPages();
-    for (let i = 1; i <= totalPages; i++) {
-      doc.setPage(i);
-      addFooter(doc, i, totalPages, periodLabel);
-    }
-
-    doc.save(`rapport_salaires_${period}.pdf`);
+    const fileName = `Bulletin_${livreurData.nom.replace(/\s+/g, '_')}_Cycle${cycle.numero}.pdf`;
+    doc.save(fileName);
+    uploadBytes(ref(storage, `bulletins_salaires/cycle${cycle.numero}/${livreurData.id}_${Date.now()}.pdf`), pdfBlob).catch(e => console.error(e));
 
     return { success: true };
+  } catch (error) { throw new Error('Impossible de générer le bulletin de salaire'); }
+};
 
-  } catch (error) {
-    console.error('Erreur downloadSalaryPDFDirectly:', error);
-    throw new Error('Impossible de télécharger le PDF');
-  }
+export const generateSalaryPDF = async (livreursData) => {
+  try {
+    const doc = new jsPDF();
+    const summary = calculateSummary(livreursData);
+    doc.setFillColor(79, 70, 229); doc.rect(0, 0, doc.internal.pageSize.width, 38, 'F');
+    doc.setTextColor(255, 255, 255); doc.setFontSize(18); doc.text('RAPPORT DE SALAIRES', 14, 17);
+    
+    autoTable(doc, {
+      startY: 50,
+      head: [['Livreur', 'Cycle/Présence', 'Livraisons', 'Taux', 'Base', 'Primes', 'Retenues', 'Net']],
+      body: livreursData.map(l => {
+        const c = l.cycleEnCours || {};
+        return [
+          l.nom, `C${c.numero||'-'} (${c.joursTravailles||0}j)`, `${c.livraisonsEffectuees||0}/${c.livraisonsTotal||0}`,
+          `${c.tauxSucces||0}%`, formatCurrency(c.salaireBase), formatCurrency(c.primesLivraisons),
+          c.totalManquants !== 0 ? `-${formatCurrency(c.totalManquants)}` : '-', formatCurrency(c.salaireNet)
+        ];
+      }),
+      theme: 'grid', styles: { fontSize: 7 }
+    });
+
+    doc.save(`Rapport_Salaires_Cycles_${Date.now()}.pdf`);
+    return { success: true };
+  } catch (error) { throw new Error('Impossible de générer le rapport PDF'); }
 };

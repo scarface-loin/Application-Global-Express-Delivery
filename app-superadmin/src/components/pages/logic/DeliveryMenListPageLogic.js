@@ -9,21 +9,24 @@ export const fetchAllLivreurs = async () => {
     const querySnapshot = await getDocs(collection(db, "livreurs"));
     const livreursData = [];
 
-    querySnapshot.forEach((doc) => {
-      const data = doc.data();
-      
-      // On s'assure que la structure est complète (défense contre données incomplètes) 
+    querySnapshot.forEach((livreurDoc) => {
+      const data = livreurDoc.data();
+      const financeData = data.finance || {};
+
       livreursData.push({
-        id: doc.id,
+        id: livreurDoc.id,
         ...data,
-        // Valeurs par défaut si le livreur a été créé avec une ancienne version
-        finance: data.finance || {
-          detteActuelle: 0,
-          plafondDette: 50000,
-          totalManquants: 0
+        finance: {
+          salaireBase:       financeData.salaireBase       || 50000,
+          primeParLivraison: financeData.primeParLivraison || 250,
+          // SOURCE DE VÉRITÉ : maintenu en temps réel par ValidationPageLogic
+          // (+increment à chaque session) et GarageValidationPageLogic (-increment à chaque validation).
+          // Identique à ce que fetchSalaryData utilise pour calculer salaireNet.
+          detteActuelle:     parseFloat(financeData.detteActuelle || 0),
+          plafondDette:      financeData.plafondDette       || 50000,
         },
         documents: data.documents || {
-          cniUrl: null,
+          cniUrl:    null,
           permisUrl: null,
           contratUrl: null
         },
@@ -45,13 +48,64 @@ export const updateLivreurStatus = async (livreurId, newStatus) => {
   try {
     const livreurRef = doc(db, "livreurs", livreurId);
     await updateDoc(livreurRef, {
-      statut: newStatus,
-      // Si on suspend, on le met aussi indisponible
+      statut:     newStatus,
       disponible: newStatus === 'actif'
     });
     return true;
   } catch (error) {
     console.error("Erreur mise à jour statut:", error);
     throw error;
+  }
+};
+
+/**
+ * Bloque manuellement un livreur (admin)
+ * - statut passe à 'suspendu'
+ * - disponible = false
+ * - raison et date enregistrées pour traçabilité
+ *
+ * @param {string} livreurId   - ID Firestore du livreur
+ * @param {string} raisonBlocage - Motif saisi par l'admin
+ */
+export const bloquerLivreur = async (livreurId, raisonBlocage = '') => {
+  try {
+    const adminId = localStorage.getItem('admin_id') || 'SUPER_ADMIN';
+    const livreurRef = doc(db, "livreurs", livreurId);
+    await updateDoc(livreurRef, {
+      statut:        'suspendu',
+      disponible:    false,
+      raisonBlocage: raisonBlocage.trim() || 'Bloqué par admin',
+      dateBloquage:  new Date().toISOString(),
+      bloqueParId:   adminId,
+    });
+    return true;
+  } catch (error) {
+    console.error("Erreur bloquerLivreur:", error);
+    throw new Error("Impossible de bloquer le livreur.");
+  }
+};
+
+/**
+ * Débloque un livreur (remet le statut à 'actif')
+ *
+ * @param {string} livreurId - ID Firestore du livreur
+ */
+export const debloquerLivreur = async (livreurId) => {
+  try {
+    const adminId = localStorage.getItem('admin_id') || 'SUPER_ADMIN';
+    const livreurRef = doc(db, "livreurs", livreurId);
+    await updateDoc(livreurRef, {
+      statut:          'actif',
+      disponible:      true,
+      raisonBlocage:   null,
+      dateBloquage:    null,
+      bloqueParId:     null,
+      dateDéblocage:   new Date().toISOString(),
+      débloquéParId:   adminId,
+    });
+    return true;
+  } catch (error) {
+    console.error("Erreur debloquerLivreur:", error);
+    throw new Error("Impossible de débloquer le livreur.");
   }
 };
